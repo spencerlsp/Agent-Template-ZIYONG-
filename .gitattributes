@@ -1,0 +1,13 @@
+# Keep line endings stable: LF in the repository and on every checkout.
+# Without this, Windows checkouts (CRLF) produce noisy, meaningless diffs.
+* text=auto eol=lf
+
+# Binary assets that must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.sqlite3 binary
+*.docx binary
