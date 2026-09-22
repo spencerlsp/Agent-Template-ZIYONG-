@@ -175,7 +175,7 @@ class OpenAICompatiClient(LLMClient):
         raw_message = choice.message
         tool_calls: list[ToolCall] = []
         for item in raw_message.tool_calls or []:
-            arguments, error = self._parse_argument(item.function.arguments)
+            arguments, error = self._parse_arguments(item.function.arguments)
             tool_calls.append(
                 ToolCall(
                     id=item.id,
