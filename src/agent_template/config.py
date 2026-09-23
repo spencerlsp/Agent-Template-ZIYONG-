@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class MCPServerSettings(BaseModel):
-    """One stdio MCP server the agent can launch and talk to"""
+    """一个以 stdio 方式启动的 MCP 服务器。"""
 
     name: str
     command: str
@@ -35,6 +35,7 @@ class MCPServerSettings(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     startup_timeout_s: float = 20.0
+    call_timeout_s: float = 60.0
 
 
 class Settings(BaseSettings):
