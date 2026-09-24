@@ -158,7 +158,7 @@ class VectorStore:
         ).fetchall()
         return [row[0] for row in rows]
 
-    def all_row(self) -> tuple[list[str], list[str], list[str], np.ndarray]:
+    def all_rows(self) -> tuple[list[str], list[str], list[str], np.ndarray]:
         """把全库读成 (ids, sources, texts, 向量矩阵)。
 
         数据量小，一次性全量加载换来的是检索逻辑的简单：向量检索是矩阵乘法，
@@ -200,22 +200,27 @@ class VectorStore:
         ]
 
 # ------------------------------------------------------------------------------ 校验
-    def assert_compatible(self, embedder_name: str, dim: int) -> None:
+    def assert_compatible(self, embedder_name: str, dim: int | None = None) -> None:
         """确认索引与当前 embedder 匹配；不匹配就要求重建。
 
         空库直接放行——还没写过任何东西，谈不上不一致。
+        dim 传 None 表示"维度未知"（远端 embedder 首次调用前就是这样），
+        此时只比对名字。
         """
         stored_name = self.get_meta("embedder")
         if stored_name is None:
             return
 
         stored_dim = self.get_meta("dim")
-        if stored_name != embedder_name or (stored_dim and int(stored_dim) != dim):
+        name_changed = stored_name != embedder_name
+        dim_changed = bool(stored_dim and dim) and int(stored_dim) != dim
+        if name_changed or dim_changed:
             raise EmbeddingMismatch(
                 f"索引是用 `{stored_name}`（{stored_dim} 维）建立的，"
-                f"当前配置是 `{embedder_name}`（{dim} 维）。"
+                f"当前配置是 `{embedder_name}`（{dim or '未知'} 维）。"
                 "请重建索引：uv run python scripts/rag_index.py"
             )
 
+        
     def close(self) -> None:
         self._conn.close()

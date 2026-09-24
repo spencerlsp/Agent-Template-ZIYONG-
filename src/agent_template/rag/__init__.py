@@ -8,6 +8,9 @@ from agent_template.rag.embeddings import (
 )
 from agent_template.rag.loaders import Document, iter_documents
 from agent_template.rag.store import EmbeddingMismatch, ScoredChunk, VectorStore
+from agent_template.rag.pipeline import RagNotReady, RagPipeline
+from agent_template.rag.retriever import BM25, HybridRetriever, reciprocal_rank_fusion
+from agent_template.rag.tools import register_rag_tools
 
 __all__ = [
     "Chunk",
@@ -23,4 +26,10 @@ __all__ = [
     "chunk_documents",
     "iter_documents",
     "tokenize",
+    "RagNotReady",
+    "RagPipeline",
+    "BM25",
+    "HybridRetriever",
+    "reciprocal_rank_fusion",
+    "register_rag_tools"
 ]
