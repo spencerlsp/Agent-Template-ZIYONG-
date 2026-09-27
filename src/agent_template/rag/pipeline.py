@@ -59,18 +59,24 @@ class RagPipeline:
     def format_context(chunks: list[ScoredChunk]) -> str:
         """把检索结果拼成能直接塞进提示词的上下文。
 
-        带序号和来源是刻意的：模型看到 `[1] 来源：what-is-rag.md` 才可能
-        在答案里引用出处；没有来源标注，它会把这些片段和自己的记忆混在一起，
+        带序号和来源是刻意的：模型看到 `[1] 来源：what-is-rag.md` 才可能在
+        答案里引用出处；没有来源标注，它会把这些片段和自己的记忆混在一起，
         你就无法判断答案到底有没有依据。
+
+        刻意不显示分数：这里的分数是 RRF 融合分（1/(60+名次) 的累加），
+        它只表达相对排名，绝对值没有含义——无论检索质量好坏，都落在
+        0.016~0.033 这个区间。标成"相关度"会让模型误判，实测中它确实
+        据此说过"匹配度很低，覆盖面可能不全"。排名对模型没用、对调试有用，
+        所以分数保留在 ScoredChunk 上，交给 CLI 的调试视图去显示。
         """
         if not chunks:
             return "（没有检索到相关片段）"
 
         blocks = [
-            f"[{order}] 来源：{chunk.source}（相关度 {chunk.score:.4f}）\n{chunk.text}"
+            f"[{order}] 来源：{chunk.source}\n{chunk.text}"
             for order, chunk in enumerate(chunks, start=1)
         ]
-        
+
         return "\n\n".join(blocks)
 
     async def aclose(self) -> None:
