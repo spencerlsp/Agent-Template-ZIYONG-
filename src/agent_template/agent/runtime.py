@@ -19,7 +19,7 @@ from agent_template.config import Settings
 from agent_template.llm.base import LLMClient
 from agent_template.llm.factory import build_llm
 from agent_template.mcp.bridge import register_mcp_tools
-from agent_template.mcp.client import MCPManager
+from agent_template.mcp.client import MCPManager, MCPConnectResult
 from agent_template.memory.store import MemoryStore
 from agent_template.obs.tracing import Tracer
 from agent_template.rag.pipeline import RagNotReady, RagPipeline
@@ -45,6 +45,7 @@ class AgentRuntime:
         tracer: Tracer,
         mcp: MCPManager | None = None,
         rag: RagPipeline | None = None,
+        mcp_failures: list[MCPConnectResult] | None = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
@@ -54,6 +55,7 @@ class AgentRuntime:
         self.tracer = tracer
         self.mcp = mcp
         self.rag = rag
+        self.mcp_failures: list[MCPConnectResult] = mcp_failures or []
         self.loop = AgentLoop(
             llm=llm,
             registry=registry,
@@ -87,7 +89,6 @@ class AgentRuntime:
 
         # ---- RAG: 没建索引时降级 , 不阻断启动 ----
         rag: RagPipeline | None = None
-        rag: RagPipeline | None = None
         if enable_rag:
             candidate = RagPipeline(settings)
             try:
@@ -100,14 +101,20 @@ class AgentRuntime:
                 register_rag_tools(registry, rag)
                 logger.info("RAG 已就绪，索引 %d 个片段", rag.store.count())
 
-         # ---- MCP：远端工具并入同一张表 ----
+        # ---- MCP：远端工具并入同一张表；连不上的要留下失败记录 ----
+        # mcp 必须先声明：下面那个 if 不成立时（没配 server，或调用方显式
+        # connect_mcp=False），构造 runtime 时仍然会用到这个变量。
         mcp: MCPManager | None = None
+        mcp_failures: list[MCPConnectResult] = []
         if connect_mcp and settings.mcp_servers:
             mcp = MCPManager(settings.mcp_servers)
-            connected = await mcp.connect_all()
+            results = await mcp.connect_all()
+            connected = [r for r in results if r.ok]
+            mcp_failures = [r for r in results if not r.ok]
             if connected:
                 await register_mcp_tools(registry, mcp)
-                logger.info("MCP 已连接：%s", connected)   
+                logger.info("MCP 已连接：%s", [r.name for r in connected])
+
 
         runtime = cls(
             settings=settings,
@@ -118,6 +125,7 @@ class AgentRuntime:
             tracer=Tracer(settings.trace_path),
             mcp=mcp,
             rag=rag,
+            mcp_failures=mcp_failures,
         )
         logger.info("工具表共 %d 个工具", len(runtime.registry))
         return runtime

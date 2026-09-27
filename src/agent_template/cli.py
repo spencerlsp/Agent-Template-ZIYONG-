@@ -197,11 +197,30 @@ def _run(coro: Coroutine[Any, Any, Any]) -> Any:
         raise typer.Exit(130) from None
 
 
+def print_mcp_notices(runtime: AgentRuntime) -> None:
+    """把 MCP 启动失败的原因和建议打印出来。
+
+    为什么必须在对话之前打印：MCP 起不来属于**静默降级**——模型照常回答，
+    只是不会用那台服务器的工具。用户不知道这件事，就只会觉得"模型怎么不用
+    这个能力"，然后去怀疑模型或提示词。把降级变成可见，是这一段唯一的目的。
+
+    输出走 stderr：它属于"过程"，不能污染 stdout 里的回答。
+    """
+    for failure in runtime.mcp_failures:
+        err.print(
+            f"⚠ MCP 服务器 `{failure.name}` 未启动，它的工具本次不可用",
+            style="bold yellow",
+        )
+        err.print(f"   原因：{failure.reason}")
+        err.print(f"   排查：{failure.hint}")
+
+
 # ------------------------------------------------------------------- 对话流
 async def _ask(options: Options, question: str) -> int:
     """单次问答。返回退出码。"""
     runtime = await AgentRuntime.create(options.build_settings())
     try:
+        print_mcp_notices(runtime)
         renderer = EventRenderer(options)
         await renderer.render(
             runtime.ask(question, session_id=options.session, stream=options.stream)
@@ -222,6 +241,7 @@ async def _chat(options: Options) -> int:
     """交互式对话。返回退出码。"""
     runtime = await AgentRuntime.create(options.build_settings())
     try:
+        print_mcp_notices(runtime)
         renderer = EventRenderer(options)
         out.print(
             Panel.fit(
@@ -343,6 +363,7 @@ def tools(ctx: typer.Context) -> None:
     async def collect() -> int:
         runtime = await AgentRuntime.create(options.build_settings())
         try:
+            print_mcp_notices(runtime)
             table = Table(show_header=True, header_style="bold")
             table.add_column("工具", style="cyan", no_wrap=True)
             table.add_column("来源", style="dim", no_wrap=True)

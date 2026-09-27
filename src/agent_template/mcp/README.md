@@ -22,10 +22,15 @@
 
 | 名字 | 文件 | 类型 | 职责 |
 | --- | --- | --- | --- |
-| `MCPError` | `client.py` | 异常 | 连接层面的失败：连不上、握手超时。**工具自身的失败不走这里** |
+| `MCPError` | `errors.py` | 异常 | 连接层面的失败：连不上、握手超时。**工具自身的失败不走这里** |
+| `MCPTimeoutError` | `errors.py` | 异常 | 启动握手超时。**单独一个类型**，因为超时的排查动作和"命令不存在"完全不同，上层只能靠类型区分 |
+| `MCPConnectResult` | `client.py` | dataclass | 一个服务器的连接结果：`ok` / `tools` / `reason`（原因）/ `hint`（建议）/ `cause`（原始异常） |
 | `MCPTool` | `client.py` | dataclass | 远端工具的描述：`server` / `name` / `description` / `parameters` |
 | `MCPClient` | `client.py` | 类 | 单个服务器的常驻连接：`connect()` / `list_tools()` / `call_tool()` / `aclose()` |
-| `MCPManager` | `client.py` | 类 | 多个客户端的集合：`connect_all()` / `all_tools()` / `call()` / `aclose()` |
+| `MCPManager` | `client.py` | 类 | 多个客户端的集合：`connect_all()` / `all_tools()` / `call()` / `aclose()`。**连接与关闭都是顺序执行**（原因见下文第 7 条） |
+| `explain_failure()` | `diagnostics.py` | 函数 | 把异常翻译成 `(原因, 排查建议)`——沿异常链从外往里找第一个认得的类型 |
+| `exception_chain()` / `root_cause()` | `diagnostics.py` | 函数 | 摊平异常链 / 挖到最底层原因 |
+| `manual_command()` | `diagnostics.py` | 函数 | 拼出"手动跑一次"的复现命令（含引号处理） |
 | `_handler_for()` | `bridge.py` | 函数 | 为单个远端工具造一个本地 handler（闭包绑住 server 与工具名） |
 | `register_mcp_tools()` | `bridge.py` | async 函数 | 发现工具并注册进登记表，重名跳过 |
 | `MCPServer` / `echo` / `add` | `example_server.py` | 示例 server | 随模板附带的零依赖 stdio server |
@@ -98,6 +103,20 @@ async def handler(**kwargs: Any) -> str:
 `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`。本项目按 2.x 写，
 `pyproject.toml` 里锁的是 `mcp>=2.2.0`。
 
+**7. 为什么 `connect_all` 和 `aclose` 都是顺序执行，而不是并发。**
+MCP SDK 的 stdio 客户端内部用了 anyio 的**取消作用域**，而取消作用域有"任务亲和性"：
+在哪个任务里进入，就必须在同一个任务里退出。`asyncio.gather` 会把每个协程包成独立的
+Task，于是 `connect()` 在 Task-A 里建立连接、`aclose()` 在另一个任务里执行，触发：
+
+```
+RuntimeError: Attempted to exit cancel scope in a different task than it was entered in
+```
+
+子进程其实还是被杀掉了，但异常会冒出来——更糟的是它很容易被上层的
+`return_exceptions=True` 悄悄吞掉，变成"看起来没事、其实没关干净"的状态。
+所以这两个方法都改成顺序执行：代价是多个 server 串行启动（总耗时累加），
+换来的是干净、可预期的生命周期。
+
 ## 怎么扩展
 
 ### 接第三方 server（不需要写代码）
@@ -146,11 +165,11 @@ docstring 会成为工具描述——和本地工具一样，**描述写得好�
 | 优先级 | 事项 | 说明与建议 | 大致工作量 |
 | --- | --- | --- | --- |
 | 高 | **工具名加命名空间** | 现在重名靠"跳过 + 警告"，多个 server 时很容易撞。改成 `fs__read_file` 这样的前缀，冲突问题从根上消失。代价是模型看到的工具名变长，所以要权衡 | 两小时 |
-| 高 | **启动失败的可视化提示** | 现在失败只在日志里。CLI 启动时应该明确告诉用户"server X 没起来，原因：…，相关工具不可用"，否则用户只会觉得"为什么模型不会用那个工具" | 半天 |
+| 高 | ~~启动失败的可视化提示~~ | **已实现**：`MCPConnectResult` 带 `reason` + `hint`，CLI 在开始对话前打印"哪台服务器没起来、为什么、怎么排查" | — |
 | 中 | **健康检查与重连** | 长会话里子进程可能崩。定期 ping，失败则重连并把工具表刷新一遍 | 一天 |
 | 中 | **支持 HTTP / SSE 传输** | 接入远程或共享的 MCP 服务时需要 | 一天 |
 | 中 | **resources / prompts** | MCP 还有资源（可读数据）和提示模板两类能力。接进来能解锁更多现成 server | 两天 |
 | 低 | **工具调用审计** | 记录"哪个 server 的哪个工具被谁调用、参数是什么"，跨进程调用的透明度值得投入 | 半天 |
 
-我的建议：**先做"启动失败提示"和"工具名命名空间"**。前者解决"静默失效"，
-后者解决"多 server 必撞名"——这两个问题在挂第二个 server 时一定会遇到。
+我的建议：**先做"工具名命名空间"**——挂第二个 server 时一定会遇到重名，
+而重名现在只记一条 warning 就被跳过了，和"没配"很难区分。

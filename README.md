@@ -443,6 +443,7 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 | 多轮对话报消息顺序非法 | 历史裁剪把 `tool_calls` 与结果拆散了 | 裁剪窗口对齐到 `user` 消息边界 |
 | `sqlite3` 报 `uses 1, and there are 5 supplied` | `(value)` 不是元组，字符串被逐字符展开 | 写成 `(value,)`，或改用命名参数 |
 | 反复重启后残留 python 子进程 | MCP 子进程随连接创建，异常路径没关闭 | 所有路径都走 `aclose()`（CLI 用 `try/finally`） |
+| MCP 关闭时报 `Attempted to exit cancel scope in a different task` | MCP SDK 的 anyio 取消作用域有"任务亲和性"，`asyncio.gather` 会把它拆到不同任务里 | 连接与关闭都改为顺序执行，见 [mcp/README.md](src/agent_template/mcp/README.md) 第 7 条 |
 
 ## 开发
 

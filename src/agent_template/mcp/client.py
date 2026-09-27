@@ -13,20 +13,19 @@ import asyncio
 import json
 import logging
 import os
+import time
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 from agent_template.config import MCPServerSettings
+from agent_template.mcp.diagnostics import explain_failure
+from agent_template.mcp.errors import MCPError, MCPTimeoutError
 
 logger = logging.getLogger("agent.mcp")
-
-class MCPError(RuntimeError):
-    """MCP 环节的失败：连不上、握手超时、调用超时。"""
-
 
 @dataclass(slots=True)
 class MCPTool:
@@ -36,6 +35,21 @@ class MCPTool:
     name: str
     description: str
     parameters: dict[str, Any]
+
+@dataclass(slots=True)
+class MCPConnectResult:
+    """一个 MCP 服务器的连接结果。
+
+    为什么要单独定义它：connect_all 原来只返回"成功的服务器名列表"，
+    失败的信息（谁失败了、为什么）在抛出异常那一刻就丢了，调用方拿不到。
+    """
+    name: str
+    ok: bool
+    tools: list[str] = field(default_factory=list) # 成功后暴露了哪些工具
+    reason: str | None = None  # 给人看：发生了什么
+    hint: str | None = None    # 给人看：下一步做什么
+    cause: BaseException | None = None  # 给代码用：原始异常，分类的依据
+
 
 
 class MCPClient:
@@ -73,6 +87,8 @@ class MCPClient:
         )
         # 创建异步资源管理栈，用来托管MCP Client这个异步上下文
         stack = AsyncExitStack()
+        # 记下开始时间：判断"是不是超时"用"等了多久"，比看异常类型可靠
+        started = time.perf_counter()
         try:
             # asyncio.wait_for 限制【整个启动握手流程】的最大耗时
             # stack.enter_async_context：
@@ -92,15 +108,30 @@ class MCPClient:
             # 拉工具清单也放在 try 里：这一步失败同样要收掉子进程
             # 调用list_tools接口，拉取服务端所有可用工具，存入self.tools缓存
             await self.list_tools()
-        except Exception as exc:
-            # 启动握手出现任何异常：超时、命令不存在、握手协议报错等
-            # 立刻关闭资源栈，内部会杀死已拉起的子进程，清理管道，避免僵尸进程残留
-            await stack.aclose()
-            # 包装为自定义MCP异常，from exc保留原始异常栈，方便排查根因
+        except BaseException as exc:
+            # 注意这里接的是 BaseException 而不是 Exception：
+            # asyncio.wait_for 超时时，SDK 内部的 anyio 取消常常表现为
+            # CancelledError，而它继承自 BaseException——用 except Exception
+            # 会漏掉，超时就会被误判成"未知错误"。
+            #
+            # 关闭资源栈会杀死已拉起的子进程、清理管道，避免僵尸进程残留
             await stack.aclose()
             self._stack = None
             self._client = None
-            raise MCPError(f"连接 MCP 服务器 `{self.settings.name}` 失败：{exc}") from exc
+            waited = time.perf_counter() - started
+
+            # 用"等了多久"判断超时，比看异常类型可靠：两种异常形态都见过
+            if waited >= self.settings.startup_timeout_s * 0.9:
+                raise MCPTimeoutError(f"启动超时（等待 {waited:.1f} 秒）") from exc
+
+            # 不是超时，而是外部取消（Ctrl+C、上层取消）：原样抛出。
+            # 不能把它伪装成连接失败，否则整个程序就停不下来了。
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+
+            # 只留原因，服务器名由上层拼——否则最终提示里会出现两遍名字。
+            # from exc 必须保留：diagnostics 要靠 __cause__ 判断根因。
+            raise MCPError(f"{type(exc).__name__}: {exc}") from exc
 
 
 
@@ -193,30 +224,47 @@ class MCPManager:
             server.name: MCPClient(server) for server in servers if server.enabled
         }
 
-    async def connect_all(self) -> list[str]:
-        """并发连接所有启用的服务器，返回连接成功的服务器名。
-        设计目标：单个服务器起不来不能拖垮整个 agent：失败只记 warning 并跳过。
+    async def connect_all(self) -> list[MCPConnectResult]:
+        """逐个连接所有启用的服务器，返回**每个**服务器的结果。
+
+        设计目标：单个服务器起不来不能拖垮整个 agent——失败只记 warning 并跳过。
+        但"跳过"不等于"没人知道"：失败的原因和建议必须通过返回值带出去，
+        让 CLI 能在开始对话之前告诉用户"哪些工具不可用、为什么、怎么办"。
         """
-        # 取出所有MCP服务名称列表，用来后面和执行结果一一对应
-        names = list(self.clients)
+        results: list[MCPConnectResult] = []
 
-        # asyncio.gather：并发执行多个异步任务
-        # return_exceptions=True：任务报错不会直接抛出异常，而是把异常对象作为返回值放到结果列表
-        outcomes = await asyncio.gather(
-            *(client.connect() for client in self.clients.values()),
-            return_exceptions=True,
-        )
-
-        connected: list[str] = []
-        # 遍历【服务名】和【任务结果】，两两配对
-        for name, outcome in zip(names, outcomes):
-            # 如果outcome是异常对象，说明这个服务器connect失败
-            if isinstance(outcome, BaseException):
-                logger.warning("MCP 服务器 `%s` 连接失败，已跳过：%s", name, outcome)
+        # 这里刻意**不用 asyncio.gather**，而是逐个连接：
+        #   MCP SDK 的 stdio 客户端内部用了 anyio 的取消作用域，而取消作用域有
+        #   「任务亲和性」——在哪个任务里进入，就必须在同一个任务里退出。
+        #   gather 会把每个 connect() 包成独立的 Task，于是随后的 aclose()
+        #   跑到另一个任务里，触发：
+        #       RuntimeError: Attempted to exit cancel scope in a different task
+        #   子进程虽然还是被杀了，但关闭动作会报错（而且很容易被上层悄悄吞掉）。
+        #   代价：多个 server 串行启动，总耗时是累加；换来的是干净的生命周期。
+        for name, client in self.clients.items():
+            try:
+                await client.connect()
+            except asyncio.CancelledError:
+                # 外部取消（Ctrl+C、上层超时）要原样传播，不能记成"连接失败"，
+                # 否则整个程序就停不下来了
+                raise
+            except BaseException as exc:
+                # 翻译成「原因 + 建议」，而不是把异常名直接丢给用户
+                reason, hint = explain_failure(exc, client.settings)
+                logger.warning("MCP 服务器 `%s` 未启动：%s", name, reason)
+                logger.warning("  ↳ 排查：%s", hint)
+                results.append(
+                    MCPConnectResult(name, False, reason=reason, hint=hint, cause=exc)
+                )
             else:
-                # 连接成功，加入成功列表返回给上层
-                connected.append(name)
-        return connected
+                results.append(
+                    MCPConnectResult(
+                        name,
+                        True,
+                        tools=[tool.name for tool in client.tools],
+                    )
+                )
+        return results
 
     async def all_tools(self) -> list[MCPTool]:
         """汇总所有服务器暴露的工具。
@@ -236,11 +284,16 @@ class MCPManager:
         return await client.call_tool(name, arguments)
 
     async def aclose(self) -> None:
-        """并发关闭所有连接。
-        并发调用每个client的aclose，统一清理所有MCP子进程、管道资源
-        return_exceptions=True：某个服务关闭失败不影响其他服务关闭
+        """顺序关闭所有连接。
+
+        和 connect_all 同样的理由：MCP SDK 的 stdio 客户端有「任务亲和性」，
+        用 asyncio.gather 关闭会把每个 aclose 放进新任务，导致取消作用域
+        退出失败。单个服务关闭出错只记 warning，不影响其他的。
         """
-        await asyncio.gather(
-            *(client.aclose() for client in self.clients.values()),
-            return_exceptions=True,
-        )
+        for client in self.clients.values():
+            try:
+                await client.aclose()
+            except Exception as exc:  # noqa: BLE001 - 一个关不掉不该影响其他
+                logger.warning(
+                    "关闭 MCP 服务器 `%s` 时出错：%s", client.settings.name, exc
+                )
