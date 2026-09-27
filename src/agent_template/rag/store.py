@@ -89,8 +89,14 @@ class VectorStore:
 
     # -------------------------------------------------------------写入
     def reset(self) -> None:
-        """清空索引。重建时用，不影响documments 表以外的任何东西"""
+        """整库重建前清空内容。
+
+        两张表都要清：只清 chunks 的话，上一轮索引过的文件会在 documents
+        里留下记录。等以后做增量索引时，这些幽灵记录会让那些文件被误判成
+        "已经索引过"，从而跳过本该重新处理的文档。
+        """
         self._conn.execute("DELETE FROM chunks")
+        self._conn.execute("DELETE FROM documents")
         self._conn.commit()
 
     def set_meta(self, key: str, value: str) -> None:
@@ -218,7 +224,7 @@ class VectorStore:
             raise EmbeddingMismatch(
                 f"索引是用 `{stored_name}`（{stored_dim} 维）建立的，"
                 f"当前配置是 `{embedder_name}`（{dim or '未知'} 维）。"
-                "请重建索引：uv run python scripts/rag_index.py"
+                "请重建索引：uv run agent index"
             )
 
         

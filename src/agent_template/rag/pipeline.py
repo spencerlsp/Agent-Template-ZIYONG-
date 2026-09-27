@@ -44,7 +44,7 @@ class RagPipeline:
         if self.store.count() == 0:
             raise RagNotReady(
                 f"索引为空（{self.settings.index_path}）。"
-                "先建索引：uv run python scripts/rag_index.py"
+                "先建索引：uv run agent index"
             )
 
         # 远端 embedder 在第一次调用前不知道自己的维度，这种情况只比对名字

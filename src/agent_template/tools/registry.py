@@ -127,6 +127,14 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [tool.spec() for tool in self._tools.values()]
 
+    def entries(self) -> list[Tool]:
+        """返回全部工具对象。
+
+        给 CLI 这类需要展示"来源"的场景用：specs() 是给模型看的，
+        里面只有 name/description/parameters，没有 source。
+        """
+        return list(self._tools.values())
+
     def names(self) -> list[str]:
         return sorted(self._tools)
 
