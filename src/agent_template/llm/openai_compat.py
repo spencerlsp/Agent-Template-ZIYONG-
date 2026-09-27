@@ -57,6 +57,15 @@ class OpenAICompatiClient(LLMClient):
         self.base_url = base_url.rstrip("/")
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
+        # 防线放在接收方：这个类可能被别处直接构造，只有在这里校验才兜得住所有调用路径。
+        # 我们踩过的坑是把 SecretStr 对象整个传了进来——它会被 str() 成 '**********'，
+        # 于是十个星号被当成密钥发出去，换来一个毫无头绪的 401。
+        # 注意 None 是合法的：本地服务不需要 key，下面会退化成占位符。
+        if api_key is not None and not isinstance(api_key, str):
+            raise TypeError(
+                "api_key 必须是普通字符串；如果它来自 SecretStr，"
+                f"请先调用 .get_secret_value()（当前收到 {type(api_key).__name__}）"
+            )
         self._client = AsyncOpenAI(
             api_key=api_key or _PLACEHOLDER_KEY,
             base_url=self.base_url,
