@@ -1,0 +1,26 @@
+# RAG 检索评测数据集：一行一条用例，允许空行和 # 开头的注释行。
+#
+# 字段说明：
+#   id          用例编号，报告和 diff 里用它指代
+#   query       用户会问的问题（尽量写你自己真会问的话，不要照着原文改）
+#   gold        标准答案的位置：source 是相对 data/knowledge/ 的路径，
+#               contains 是文档里的关键句片段（脚本自己去找它在哪）
+#   kind        问题类型，用于分桶统计——类型不同，考察的能力完全不同
+#   note        备注，只给人看
+#
+# 为什么用 contains 而不是字符偏移：偏移会随切块参数和文档编辑而失效，
+# 而 contains 只依赖文档内容，改切块参数不用重标。
+
+{"id":"rag-01","query":"RAG 的全称是什么","gold":[{"source":"what-is-rag.md","contains":"Retrieval-Augmented Generation"}],"kind":"术语精确"}
+{"id":"rag-02","query":"为什么模型答不了公司内部的资料","gold":[{"source":"what-is-rag.md","contains":"企业内部的私有文档它没见过"}],"kind":"语义改写"}
+{"id":"rag-03","query":"把文档变成可检索的片段需要哪几步","gold":[{"source":"what-is-rag.md","contains":"1. 切块：把文档拆成几百字的片段"}],"kind":"多跳"}
+{"id":"rag-04","query":"片段切得太大或者太小分别有什么问题","gold":[{"source":"what-is-rag.md","contains":"片段太大检索不精准，太小又丢上下文"}],"kind":"术语精确"}
+{"id":"rag-05","query":"为什么只做向量检索不够用","gold":[{"source":"what-is-rag.md","contains":"专有名词、编号、错误码这类精确匹配场景"}],"kind":"语义改写"}
+{"id":"rag-06","query":"两路排名是怎么合并到一起的","gold":[{"source":"what-is-rag.md","contains":"再用 RRF 之类的算法"}],"kind":"结构定位"}
+{"id":"rag-07","query":"换了 embedding 模型之后忘记重建索引会有什么后果","gold":[{"source":"what-is-rag.md","contains":"检索结果会静默地全错"}],"kind":"陷阱"}
+{"id":"rag-08","query":"检索结果为什么必须带上出处","gold":[{"source":"what-is-rag.md","contains":"否则用户无法核实"}],"kind":"语义改写"}
+{"id":"rag-09","query":"MCP 是个什么协议","gold":[{"source":"agent-anatomy.md","contains":"工具接入的标准化协议"}],"kind":"术语精确"}
+{"id":"rag-10","query":"为什么工具的参数校验必须自己写","gold":[{"source":"agent-anatomy.md","contains":"不能指望模型自觉"}],"kind":"语义改写"}
+{"id":"rag-11","query":"技能和工具的区别在哪","gold":[{"source":"agent-anatomy.md","contains":"工具是原子能力，技能是"}],"kind":"结构定位"}
+{"id":"rag-12","query":"什么叫渐进式披露","gold":[{"source":"agent-anatomy.md","contains":"这种做法叫渐进式披露"}],"kind":"术语精确"}
+{"id":"rag-13","query":"工具执行失败时应该怎么做","gold":[{"source":"agent-anatomy.md","contains":"工具报错时要返回错误文本而不是抛异常"}],"kind":"陷阱"}
