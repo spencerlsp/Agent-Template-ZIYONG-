@@ -16,6 +16,6 @@ def register_skill_tools(registry: ToolRegistry, index: SkillsIndex) -> ToolRegi
         """列出当前可用的技能，以及每个技能的一句话说明。"""
         return index.catalog()   
 
-    registry.register(load_skill)
-    registry.register(list_skills)
+    registry.register(load_skill, read_only=True)
+    registry.register(list_skills, read_only=True)
     return registry

@@ -17,5 +17,5 @@ def register_rag_tools(registry: ToolRegistry, pipeline: RagPipeline) -> ToolReg
         chunks = await pipeline.search(query, top_k)
         return pipeline.format_context(chunks)
 
-    registry.register(search_knowledge_base)
+    registry.register(search_knowledge_base, read_only=True)
     return registry

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, AsyncIterator
@@ -25,7 +26,7 @@ from typing import Any, AsyncIterator
 from agent_template.agent.events import AgentEvent
 from agent_template.agent.prompts import build_system_prompt
 from agent_template.config import Settings
-from agent_template.llm.base import LLMClient, Message, Usage
+from agent_template.llm.base import LLMClient, Message, Usage, ToolCall
 from agent_template.memory.store import MemoryStore
 from agent_template.obs.tracing import TokenAccountant, Tracer
 from agent_template.skills.loader import SkillsIndex
@@ -109,31 +110,69 @@ class AgentLoop:
                 yield AgentEvent(kind="finished", step=step, text=message.content or "")
                 return
 
-            for call in message.tool_calls:
-                yield AgentEvent(
-                    kind="tool_call",
-                    step=step,
-                    tool_name=call.name,
-                    tool_call_id=call.id,
-                    tool_arguments=call.arguments,
-                )
+            # for call in message.tool_calls:
+            #     yield AgentEvent(
+            #         kind="tool_call",
+            #         step=step,
+            #         tool_name=call.name,
+            #         tool_call_id=call.id,
+            #         tool_arguments=call.arguments,
+            #     )
 
-                with self._span("tool.call", tool=call.name):
-                    # registry.call 从不抛异常，失败会变成 "错误：..." 文本，
-                    # 让模型自己看到并纠正，而不是把循环打断
-                    result = await self.registry.call(call.name, call.arguments)
+            #     with self._span("tool.call", tool=call.name):
+            #         # registry.call 从不抛异常，失败会变成 "错误：..." 文本，
+            #         # 让模型自己看到并纠正，而不是把循环打断
+            #         result = await self.registry.call(call.name, call.arguments)
 
-                tool_message = Message.tool_result(call.id, result, name=call.name)
-                messages.append(tool_message)
-                self.memory.append(session_id, tool_message)
+            #     tool_message = Message.tool_result(call.id, result, name=call.name)
+            #     messages.append(tool_message)
+            #     self.memory.append(session_id, tool_message)
 
-                yield AgentEvent(
-                    kind="tool_result",
-                    step=step,
-                    tool_name=call.name,
-                    tool_call_id=call.id,
-                    tool_result=result,
-                )
+            #     yield AgentEvent(
+            #         kind="tool_result",
+            #         step=step,
+            #         tool_name=call.name,
+            #         tool_call_id=call.id,
+            #         tool_result=result,
+            #     )
+
+            # 把这一轮的工具调用按"能不能并发"分批（见 group_parallel_calls）。
+            # 注意回填顺序：tool 消息必须和 assistant 的 tool_calls 一一对应，
+            # 所以下面严格按原顺序走，不能"谁先跑完谁先写"。
+            for batch in group_parallel_calls(message.tool_calls, self.registry):
+                # 先把这一批次的调用时间抛完 —— 让用户看到“模型同时发起了这几个”
+                for call in batch:
+                    yield AgentEvent(
+                        kind="tool_call",
+                        step=step,
+                        tool_name=call.name,
+                        tool_call_id=call.id,
+                        tool_arguments=call.arguments,
+                    )
+
+                # 执行。 批里只有一个就直连await(省掉并发调度的开销)
+                if len(batch) == 1:
+                    results = [await self._call_tool(batch[0])]
+                else:
+                    with self._span("tools.batch", count=len(batch)):
+                        results = await asyncio.gather(
+                            *(self._call_tool(call) for call in batch)
+                        )
+
+                # 回填。gather 的返回值时**按传入顺序**排的(不是按完成顺序)
+                # 所以zip一下就正好对应上协议要求的顺序
+                for call, result in zip(batch, results):
+                    tool_message = Message.tool_result(call.id, result, name=call.name)
+                    messages.append(tool_message)
+                    self.memory.append(session_id, tool_message)
+
+                    yield AgentEvent(
+                        kind="tool_result",
+                        step=step,
+                        tool_name=call.name,
+                        tool_call_id=call.id,
+                        tool_result=result,
+                    )
 
         # for 循环跑满都没 return，说明一直在调工具、没给出最终答案
         yield AgentEvent(
@@ -174,6 +213,15 @@ class AgentLoop:
                     holder["message"] = chunk.message
                     holder["usage"] = chunk.usage
 
+    async def _call_tool(self, call: ToolCall) -> str:
+        """执行单个工具调用。
+
+        单独抽成方法，是为了能丢进 asyncio.gather 并发执行。
+        注意 registry.call **从不抛异常**（失败会变成「错误：...」文本），
+        所以并发时不需要额外的异常处理——这一点让 gather 特别安全。
+        """
+        with self._span("tool_call", tool=call.name):
+            return await self.registry.call(call.name, call.arguments)
     # ------------------------------------------------------------------ 辅助
     def _span(self, name: str, **attributes: Any) -> AbstractContextManager[Any]:
         """没有配置 tracer 时退化成空上下文，调用处不用写 if。"""
@@ -181,7 +229,45 @@ class AgentLoop:
             return nullcontext()
         return self.tracer.span(name, **attributes)
 
+
     @property
     def stats(self) -> str:
         """给 CLI 收尾时打印的一行统计。"""
         return self.accountant.summary()
+
+
+def group_parallel_calls(
+    calls: list[ToolCall], registry: ToolRegistry
+) -> list[list[ToolCall]]:
+    """把同一轮的多个工具调用按"能不能并发"分批。
+
+    规则：**连续的只读调用并成一批，有副作用的调用单独成批。**
+
+    为什么用"连续段"而不是"把只读的全挑出来凑一堆"：
+        模型给出的顺序本身就是它对任务的理解。"写 A 再读 A"这种依赖，
+        只有保持原顺序才成立——如果先把所有读挑出来一起跑，那个读就会在
+        写之前执行，拿到旧数据。按连续段分批，既保住了顺序语义，
+        又让相邻的只读调用拿到并行收益。
+
+    为什么副作用调用不跟任何东西合并：
+        两个写操作之间的先后是模型指定的，合并执行会让顺序变得不确定。
+        代价是连续两个写操作不会并行——这是刻意的，正确性优先。
+
+    纯函数：只读参数、返回新列表，不碰 registry 以外的任何状态。
+    """
+    batches: list[list[ToolCall]] = []
+    current: list[ToolCall] = []
+
+    for call in calls:
+        if registry.is_parallel_safe(call.name):
+            current.append(call)
+            continue
+
+        # 遇到“副作用”的调用：先把攒着的只读批次收掉，再让她单独成一批
+        if current:
+            batches.append(current)
+            current = []
+        batches.append([call])
+    if current:
+        batches.append(current)
+    return batches

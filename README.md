@@ -19,7 +19,7 @@ Python 3.13+ ｜ uv ｜ MIT ｜ 约 3000 行 Python
 | 技能 | `src/agent_template/skills/` | `SKILL.md` + 渐进式披露：提示里只放目录，正文按需读取 |
 | MCP | `src/agent_template/mcp/` | stdio 客户端 + 随模板附带的示例 server，远端工具与本地工具同表 |
 | RAG | `src/agent_template/rag/` | 加载 → 结构感知切块 → 向量化 → SQLite 存储 → 向量 + BM25 混合检索（RRF 融合） |
-| 主循环 | `src/agent_template/agent/` | 推理/行动循环，事件流输出，会话记忆 |
+| 主循环 | `src/agent_template/agent/` | 推理/行动循环，事件流输出，会话记忆，同轮工具并发（只读的并发、有副作用的保序） |
 | 可观测 | `src/agent_template/obs/` | 链路追踪（JSONL）+ token 计量 |
 | 命令行 | `src/agent_template/cli.py` | `agent` 命令：对话、单次问答、工具/技能查看、建索引、会话管理 |
 
