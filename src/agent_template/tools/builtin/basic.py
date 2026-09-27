@@ -1,4 +1,12 @@
-"""Small dependency-free tools. Enough to prove function calling works"""
+"""零依赖的小工具集：足以验证函数调用这条链路是通的。
+
+这两个工具同时是"写工具"的最小样板：
+    * 只依赖标准库；
+    * 参数用类型注解声明，登记表会自动把它转成 JSON Schema；
+    * docstring 会**直接成为模型看到的工具描述**，所以要写清能做什么、
+      参数有什么要求——它的措辞比 schema 本身更影响模型的调用质量；
+    * 出错时返回错误文本而不是抛异常，让模型有机会自己改参数重试。
+"""
 
 from __future__ import annotations
 
@@ -21,7 +29,7 @@ _OPS = {
 
 
 def get_current_time(timezone: str = "Asia/Shanghai") -> str:
-    """Return the current date and time in the given IANA timezone."""
+    """返回指定 IANA 时区的当前日期和时间。"""
     try:
         tz = ZoneInfo(timezone)
     except ZoneInfoNotFoundError:
@@ -40,7 +48,7 @@ def get_current_time(timezone: str = "Asia/Shanghai") -> str:
 
 
 def calculator(expression: str) -> str:
-    """Evaluate a basic arithmetic experssion: + - * / // % ** and parentheses"""
+    """计算一个基础算术表达式，支持 + - * / // % ** 和括号。"""
     try:
         tree = ast.parse(expression, mode="eval")
         # ast.parse 在解析字符串的时候，就已经按照 Python 的语法规则（运算符优先级、括号），建好 AST 树结构了。
@@ -67,7 +75,12 @@ def calculator(expression: str) -> str:
 
 
 def _evaluate(node: ast.AST) -> float:
-    """Evaluate a parsed expression, allowing only arithmetic nodes"""
+    """递归求值，只放行出现在 _OPS 白名单里的节点。
+
+    白名单是这里的安全边界：不在表内的节点类型一律抛 ValueError，
+    所以 `__import__("os").system("...")` 这类表达式在求值之前就被拦下，
+    永远走不到执行那一步。这也是不用 eval() 的原因。
+    """
     # 如果是int/float常量，直接返回数值
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
