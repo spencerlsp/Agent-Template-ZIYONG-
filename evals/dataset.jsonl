@@ -10,13 +10,20 @@
 #
 # 为什么用 contains 而不是字符偏移：偏移会随切块参数和文档编辑而失效，
 # 而 contains 只依赖文档内容，改切块参数不用重标。
+#
+# 写 contains 的两个坑（都被自检抓到过）：
+#   1. 不要跨行——文档里的换行会打断字符序列，锚点要写在同一行内；
+#   2. 不要包含 Markdown 标记（** 之类）以外的多余符号，尽量取正文短语。
 
 {"id":"rag-01","query":"RAG 的全称是什么","gold":[{"source":"what-is-rag.md","contains":"Retrieval-Augmented Generation"}],"kind":"术语精确"}
 {"id":"rag-02","query":"为什么模型答不了公司内部的资料","gold":[{"source":"what-is-rag.md","contains":"企业内部的私有文档它没见过"}],"kind":"语义改写"}
 {"id":"rag-03","query":"把文档变成可检索的片段需要哪几步","gold":[{"source":"what-is-rag.md","contains":"1. 切块：把文档拆成几百字的片段"}],"kind":"多跳"}
 {"id":"rag-04","query":"片段切得太大或者太小分别有什么问题","gold":[{"source":"what-is-rag.md","contains":"片段太大检索不精准，太小又丢上下文"}],"kind":"术语精确"}
 {"id":"rag-05","query":"为什么只做向量检索不够用","gold":[{"source":"what-is-rag.md","contains":"专有名词、编号、错误码这类精确匹配场景"}],"kind":"语义改写"}
-{"id":"rag-06","query":"两路排名是怎么合并到一起的","gold":[{"source":"what-is-rag.md","contains":"再用 RRF 之类的算法"}],"kind":"结构定位"}
+# 注：这条原本指向 what-is-rag.md 里那句一笔带过的提及，扩充语料后
+# rag/03-hybrid-retrieval.md 有更权威的说明，所以改了锚点。
+# 教训：语料一变，旧标注可能不再是"最佳答案"，要跟着复核。
+{"id":"rag-06","query":"把两组排名融合起来的算法是怎么算分的","gold":[{"source":"rag/03-hybrid-retrieval.md","contains":"RRF 只用名次不用分数"}],"kind":"结构定位"}
 {"id":"rag-07","query":"换了 embedding 模型之后忘记重建索引会有什么后果","gold":[{"source":"what-is-rag.md","contains":"检索结果会静默地全错"}],"kind":"陷阱"}
 {"id":"rag-08","query":"检索结果为什么必须带上出处","gold":[{"source":"what-is-rag.md","contains":"否则用户无法核实"}],"kind":"语义改写"}
 {"id":"rag-09","query":"MCP 是个什么协议","gold":[{"source":"agent-anatomy.md","contains":"工具接入的标准化协议"}],"kind":"术语精确"}
@@ -24,3 +31,84 @@
 {"id":"rag-11","query":"技能和工具的区别在哪","gold":[{"source":"agent-anatomy.md","contains":"工具是原子能力，技能是"}],"kind":"结构定位"}
 {"id":"rag-12","query":"什么叫渐进式披露","gold":[{"source":"agent-anatomy.md","contains":"这种做法叫渐进式披露"}],"kind":"术语精确"}
 {"id":"rag-13","query":"工具执行失败时应该怎么做","gold":[{"source":"agent-anatomy.md","contains":"工具报错时要返回错误文本而不是抛异常"}],"kind":"陷阱"}
+
+# ---- rag/01-chunking.md：切块策略 ----
+{"id":"ck-01","query":"固定长度的滑窗切法有什么缺点","gold":[{"source":"rag/01-chunking.md","contains":"会从词或句子中间切断"}],"kind":"语义改写"}
+{"id":"ck-02","query":"一个片段多长比较合适","gold":[{"source":"rag/01-chunking.md","contains":"五百字左右大致是一个完整知识点"}],"kind":"语义改写"}
+{"id":"ck-03","query":"给片段加章节前缀有什么好处","gold":[{"source":"rag/01-chunking.md","contains":"能让章节标题本身参与匹配"}],"kind":"多跳"}
+
+# ---- rag/02-embedding.md：embedding 选型 ----
+{"id":"em-01","query":"换了 embedding 模型却忘了重建索引会怎样","gold":[{"source":"rag/02-embedding.md","contains":"检索结果会静默地全错"}],"kind":"陷阱"}
+{"id":"em-02","query":"没有 API Key 的时候怎么开发调试","gold":[{"source":"rag/02-embedding.md","contains":"零依赖、零成本、结果确定"}],"kind":"语义改写"}
+{"id":"em-03","query":"调远端 embedding 接口一次发多少条比较合适","gold":[{"source":"rag/02-embedding.md","contains":"每批三十二条左右比较稳妥"}],"kind":"术语精确"}
+
+# ---- rag/03-hybrid-retrieval.md：混合检索 ----
+{"id":"hy-01","query":"错误码一类的字符串为什么向量检索不行","gold":[{"source":"rag/03-hybrid-retrieval.md","contains":"错误码 E1024"}],"kind":"术语精确"}
+{"id":"hy-02","query":"为什么不能把两种检索的分数直接加权相加","gold":[{"source":"rag/03-hybrid-retrieval.md","contains":"不在同一个尺度上"}],"kind":"语义改写"}
+{"id":"hy-03","query":"RRF 公式里的 k 一般取多少","gold":[{"source":"rag/03-hybrid-retrieval.md","contains":"k 通常取 60"}],"kind":"术语精确"}
+{"id":"hy-04","query":"怎么判断混合检索到底有没有起作用","gold":[{"source":"rag/03-hybrid-retrieval.md","contains":"独家命中"}],"kind":"多跳"}
+
+# ---- rag/04-rerank.md：重排 ----
+{"id":"rr-01","query":"为什么说重排很划算","gold":[{"source":"rag/04-rerank.md","contains":"性价比最高的一步"}],"kind":"语义改写"}
+{"id":"rr-02","query":"什么信号说明该上重排了","gold":[{"source":"rag/04-rerank.md","contains":"Recall 已经很高而 MRR 偏低"}],"kind":"多跳"}
+{"id":"rr-03","query":"重排一般处理多少个候选","gold":[{"source":"rag/04-rerank.md","contains":"对融合后的前二十个候选重排"}],"kind":"术语精确"}
+
+# ---- rag/05-evaluation.md：评测 ----
+{"id":"ev-01","query":"标注标准答案时最该避免什么做法","gold":[{"source":"rag/05-evaluation.md","contains":"不要把标准答案标成片段编号"}],"kind":"陷阱"}
+{"id":"ev-02","query":"哪个指标能看出排序问题","gold":[{"source":"rag/05-evaluation.md","contains":"首个命中排名的倒数"}],"kind":"术语精确"}
+{"id":"ev-03","query":"为什么不能只看评测的平均分","gold":[{"source":"rag/05-evaluation.md","contains":"平均值容易被个别用例带偏"}],"kind":"结构定位"}
+{"id":"ev-04","query":"评测集里的问题应该从哪来","gold":[{"source":"rag/05-evaluation.md","contains":"二三十条自己真正会问的问题"}],"kind":"多跳"}
+
+# ---- rag/06-failure-modes.md：故障排查 ----
+{"id":"fm-01","query":"检索出来的全是无关内容，先怀疑哪里","gold":[{"source":"rag/06-failure-modes.md","contains":"先怀疑 embedding"}],"kind":"语义改写"}
+{"id":"fm-02","query":"回答总是缺斤少两该怎么改","gold":[{"source":"rag/06-failure-modes.md","contains":"检索用小块保证精度"}],"kind":"术语精确"}
+{"id":"fm-03","query":"文档明明放进去了却检索不到，可能是哪些原因","gold":[{"source":"rag/06-failure-modes.md","contains":"非 UTF-8 编码而被跳过"}],"kind":"陷阱"}
+
+# ---- agent/01-tool-design.md：工具设计 ----
+{"id":"td-01","query":"为什么读写文件要拆成两个工具","gold":[{"source":"agent/01-tool-design.md","contains":"而不是合成一个带 mode 参数的"}],"kind":"语义改写"}
+{"id":"td-02","query":"工具的描述部分应该怎么写","gold":[{"source":"agent/01-tool-design.md","contains":"描述里应当写清触发场景"}],"kind":"语义改写"}
+{"id":"td-03","query":"为什么绝不能让模型自己指定根目录","gold":[{"source":"agent/01-tool-design.md","contains":"环境由你在注册时冻结"}],"kind":"陷阱"}
+
+# ---- agent/02-context.md：上下文管理 ----
+{"id":"cx-01","query":"多轮对话的成本为什么涨得特别快","gold":[{"source":"agent/02-context.md","contains":"成本随轮次近似二次增长"}],"kind":"多跳"}
+{"id":"cx-02","query":"裁剪历史消息时要注意什么","gold":[{"source":"agent/02-context.md","contains":"裁剪窗口应当对齐到用户消息的边界"}],"kind":"陷阱"}
+{"id":"cx-03","query":"技能很多的时候怎么节省提示词开销","gold":[{"source":"agent/02-context.md","contains":"提示里只放名字和一句话描述"}],"kind":"语义改写"}
+
+# ---- agent/03-errors.md：错误处理 ----
+{"id":"er-01","query":"哪些错误应该跳过而不是直接报错退出","gold":[{"source":"agent/03-errors.md","contains":"缺了它还能不能完成对话"}],"kind":"语义改写"}
+{"id":"er-02","query":"遇到限流错误该怎么处理","gold":[{"source":"agent/03-errors.md","contains":"限流和五次错误退避重试"}],"kind":"术语精确"}
+{"id":"er-03","query":"为什么一定要设最大步数","gold":[{"source":"agent/03-errors.md","contains":"所以必须有最大步数"}],"kind":"陷阱"}
+
+# ---- agent/04-planning.md：任务分解 ----
+{"id":"pl-01","query":"怎么判断一个任务要不要拆开做","gold":[{"source":"agent/04-planning.md","contains":"能否用一句话说清验收标准"}],"kind":"语义改写"}
+{"id":"pl-02","query":"派生子任务时最容易出什么问题","gold":[{"source":"agent/04-planning.md","contains":"一是递归：子 agent 继续派生子任务"}],"kind":"语义改写"}
+
+# ---- llm/01-prompt.md：提示词 ----
+{"id":"pr-01","query":"系统提示词推荐按什么结构写","gold":[{"source":"llm/01-prompt.md","contains":"四段式结构"}],"kind":"术语精确"}
+{"id":"pr-02","query":"关键约束放在提示词的哪个位置更好","gold":[{"source":"llm/01-prompt.md","contains":"把最关键的约束放在结尾"}],"kind":"结构定位"}
+{"id":"pr-03","query":"写提示词时为什么不要用形容词","gold":[{"source":"llm/01-prompt.md","contains":"没有可执行的含义"}],"kind":"语义改写"}
+
+# ---- llm/02-structured-output.md：结构化输出 ----
+{"id":"so-01","query":"要求模型返回 JSON 的三种方式里哪种最可靠","gold":[{"source":"llm/02-structured-output.md","contains":"最可靠，适合字段固定的抽取类任务"}],"kind":"多跳"}
+{"id":"so-02","query":"解析模型返回的 JSON 时常见的脏数据有哪些","gold":[{"source":"llm/02-structured-output.md","contains":"外层包了代码块围栏"}],"kind":"陷阱"}
+
+# ---- llm/03-cost.md：成本与延迟 ----
+{"id":"co-01","query":"agent 的成本主要花在哪里","gold":[{"source":"llm/03-cost.md","contains":"输入 token 是主要开销"}],"kind":"语义改写"}
+{"id":"co-02","query":"工具定义太多会有什么代价","gold":[{"source":"llm/03-cost.md","contains":"十个工具的 schema"}],"kind":"术语精确"}
+
+# ---- mcp/01-protocol.md：MCP 协议 ----
+{"id":"mc-01","query":"MCP 除了 stdio 还支持什么传输方式","gold":[{"source":"mcp/01-protocol.md","contains":"Streamable HTTP"}],"kind":"术语精确"}
+{"id":"mc-02","query":"为什么用本地工具不需要先启动服务","gold":[{"source":"mcp/01-protocol.md","contains":"客户端把服务器当作子进程启动"}],"kind":"语义改写"}
+{"id":"mc-03","query":"远端工具怎么做到让模型察觉不到差别","gold":[{"source":"mcp/01-protocol.md","contains":"注册进和本地工具同一张登记表"}],"kind":"结构定位"}
+
+# ---- mcp/02-server.md：写 MCP server ----
+{"id":"ms-01","query":"自己写 server 时工具应该拆多细","gold":[{"source":"mcp/02-server.md","contains":"不要把整个内部 API 原样映射过去"}],"kind":"语义改写"}
+{"id":"ms-02","query":"工具参数名应该怎么起","gold":[{"source":"mcp/02-server.md","contains":"参数名用模型能理解的业务词汇"}],"kind":"结构定位"}
+
+# ---- ops/01-observability.md：可观测性 ----
+{"id":"ob-01","query":"为什么 agent 出问题特别难排查","gold":[{"source":"ops/01-observability.md","contains":"三种完全不同的病"}],"kind":"语义改写"}
+{"id":"ob-02","query":"日志里能不能记录用户说的话","gold":[{"source":"ops/01-observability.md","contains":"日志里混入用户内容在生产环境就是隐私问题"}],"kind":"陷阱"}
+
+# ---- ops/02-testing.md：测试 ----
+{"id":"te-01","query":"怎么在测试里让模型行为变得确定","gold":[{"source":"ops/02-testing.md","contains":"用一个确定性的假模型驱动主循环"}],"kind":"术语精确"}
+{"id":"te-02","query":"为什么不应该去测模型本身答得好不好","gold":[{"source":"ops/02-testing.md","contains":"它随版本、温度、提示词波动"}],"kind":"陷阱"}

@@ -144,7 +144,7 @@ class CaseResult:
     first_rank: int | None  # 第一个命中的排名（从 1 开始）；None 表示全部未命中
 
 
-def judge(case: Case, ranked: list[tuple[str, int]]) -> tuple[int, int | None]:
+def judge(case: Case, ranked: list[tuple[str, str, int]]) -> tuple[int, int | None]:
     """判定命中：看前 k 个片段里有没有包含每条 gold 的关键句。
 
     为什么用「关键句是否出现在片段里」而不是「字符区间是否相交」：
@@ -154,13 +154,18 @@ def judge(case: Case, ranked: list[tuple[str, int]]) -> tuple[int, int | None]:
     代价是偏悲观：如果一句话正好被切在两个片段中间，两边都不含完整句子，
     会算作未命中。但这类失败恰恰是我们最想暴露的（说明切块切得不好），
     宁可它偏悲观，也不要它偏乐观。
+
+    来源也必须比对：同一句话可能出现在多篇文档里（我们的语料里就有），
+    只比文本会把来自错误文档的片段误判成命中，指标会凭空变好。
+
+    ranked 的每一项是 (来源文档, 片段文本, 排名)。
     """
     hits = 0
     ranks: list[int] = []
 
     for gold in case.gold:
-        for text, rank in ranked:
-            if gold.contains in text:
+        for source, text, rank in ranked:
+            if source == gold.source and gold.contains in text:
                 hits += 1
                 ranks.append(rank)
                 break  # 这条 gold 已经命中，不必再看后面的片段
@@ -178,14 +183,16 @@ async def run_case(
     # 融合到底是加分还是减分。将来若嫌这个名字难看，把它们提升为公开方法即可。
     vector_ranking = await retriever._vector_ranking(case.query)
     keyword_ranking = retriever._keyword_ranking(case.query)
-    texts = retriever._texts  # 按行号索引的片段全文，与上面的排名一一对应
+    # 按行号索引的片段来源与全文，与上面的排名一一对应
+    sources = retriever._sources
+    texts = retriever._texts
 
     ranked_vector = [
-        (texts[index], rank)
+        (sources[index], texts[index], rank)
         for rank, index in enumerate(vector_ranking[:top_k], start=1)
     ]
     ranked_keyword = [
-        (texts[index], rank)
+        (sources[index], texts[index], rank)
         for rank, index in enumerate(keyword_ranking[:top_k], start=1)
     ]
 
@@ -200,7 +207,8 @@ async def run_case(
     # 融合路：走正常的对外接口，拿到的是 RRF 融合后的结果
     fused = await retriever.search(case.query, top_k=top_k)
     hits, first_rank = judge(
-        case, [(hit.text, rank) for rank, hit in enumerate(fused, start=1)]
+        case,
+        [(hit.source, hit.text, rank) for rank, hit in enumerate(fused, start=1)],
     )
     results["hybrid"] = CaseResult(case, "hybrid", hits, first_rank)
 

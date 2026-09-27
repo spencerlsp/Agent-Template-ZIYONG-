@@ -158,7 +158,9 @@ class OpenAICompatEmbedder(Embedder):
         # 失败重试的代价也大；32 条一批是稳妥的默认值。
 
         for start in range(0, len(texts), self.batch_size):
-            batch = texts[start, start + self.batch_size]
+            # 注意是切片（冒号），不是元组下标（逗号）——写成 texts[a, b]
+            # 会被当成用元组做下标，列表直接报 TypeError。
+            batch = texts[start : start + self.batch_size]
             response = await self._client.embeddings.create(
                 model=self.model, input=batch
             )
