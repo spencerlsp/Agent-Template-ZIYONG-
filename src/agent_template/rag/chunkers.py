@@ -176,11 +176,11 @@ def chunk_document(text: str, *, source: str, size: int, overlap: int) -> list[C
     buffer_path = ""         # 当前buffer所属标题路径
 
     # 遍历归一化后的最小聚合单元 _Unit
-    for unit in _to_units(parse_blocks(text), size=size, overlap=overlap):
-        # 计算标题前缀占用的字符，预留分隔换行\n\n的2个字符
-        prefix_len = len(_prefix(source, unit.heading_path)) + 2
+    # 注意 _to_units 也要传 source：它切单位时同样要扣掉标题前缀，
+    # 否则长度介于"预算"与"size"之间的段落会产出超长片段，不变量就破了。
+    for unit in _to_units(parse_blocks(text), source=source, size=size, overlap=overlap):
         # 预算：buffer最多可以容纳的正文字符上限（保证最终Chunk.text<=size）
-        budget = max(1, size - prefix_len)
+        budget = _budget(source, unit.heading_path, size)
 
         # 分支1：进入新章节，标题路径发生变化 → 不跨章节合并，丢弃跨章节重叠
         if buffer and unit.heading_path != buffer_path:
@@ -235,7 +235,9 @@ def chunk_documents(
     return chunks
 
 
-def _to_units(blocks: list[Block], *, size: int, overlap: int) -> list[_Unit]:
+def _to_units(
+    blocks: list[Block], *, source: str, size: int, overlap: int
+) -> list[_Unit]:
     """【阶段2归一】将Block转换为聚合最小单元_Unit。
     策略：
     1. 短Block直接包装为单个Unit；
@@ -244,6 +246,7 @@ def _to_units(blocks: list[Block], *, size: int, overlap: int) -> list[_Unit]:
 
     Args:
         blocks: parse_blocks输出的Block列表
+        source: 文档来源，用于计算标题前缀占用的长度
         size: Chunk总字符上限
         overlap: 重叠目标字符长度
 
@@ -252,28 +255,41 @@ def _to_units(blocks: list[Block], *, size: int, overlap: int) -> list[_Unit]:
     """
     units: list[_Unit] = []
     for block in blocks:
+        # 这里必须用 budget 而不是 size：片段还要带上"文档：… ｜ 章节：…"前缀，
+        # 前缀占掉的长度先扣掉，最终 Chunk.text 才不会超过 size。
+        budget = _budget(source, block.heading_path, size)
         # 段落长度不超限，直接包装成一个Unit
-        if len(block.text) <= size:
+        if len(block.text) <= budget:
             units.append(_Unit(block.text, block.start, block.heading_path))
             continue
         # 超长段落，先拆句子
         for offset, sentence in _split_sentences(block.text):
             # 句子长度合规，直接作为Unit
-            if len(sentence) <= size:
+            if len(sentence) <= budget:
                 # block.start + offset：句子在原始文档的全局偏移
                 units.append(_Unit(sentence, block.start + offset, block.heading_path))
                 continue
             # 句子本身超长：滑动窗口硬切
-            step = max(1, size - overlap)
+            step = max(1, budget - overlap)
             for i in range(0, len(sentence), step):
                 units.append(
                     _Unit(
-                        text=sentence[i: i + size],
+                        text=sentence[i: i + budget],
                         start=block.start + offset + i,
                         heading_path=block.heading_path,
                     )
                 )
     return units
+
+
+def _budget(source: str, heading_path: str, size: int) -> int:
+    """正文可用的字符数：总上限减去标题前缀与分隔空行。
+
+    【为什么需要它】片段最终是"前缀 + 空行 + 正文"，前缀会占掉几十个字符。
+    切单位（_to_units）和聚合（chunk_document）两处必须用同一个预算，
+    才能保证"任何片段的最终文本都不超过 size"这个不变量真的成立。
+    """
+    return max(1, size - len(_prefix(source, heading_path)) - 2)
 
 
 def _split_sentences(text: str) -> list[tuple[int, str]]:

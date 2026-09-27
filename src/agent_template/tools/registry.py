@@ -91,7 +91,9 @@ class ToolRegistry:
         """ Decorator: @registry.register, with optional name/description override"""
 
         def decorate(fn: Handler) -> Handler:
-            tool_name = fn.__name__
+            # name 参数是"改名"用的：不传才退回函数名。
+            # args_model_for 也要用改名后的名字，否则生成的参数模型类名对不上。
+            tool_name = name or fn.__name__
             self._tools[tool_name] = Tool(
                 name=tool_name,
                 description=description or first_line(fn.__doc__),
