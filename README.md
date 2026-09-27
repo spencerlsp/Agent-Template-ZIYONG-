@@ -71,6 +71,54 @@ AGENT_LLM_PROVIDER=mock uv run agent ask "现在几点？"
 `mock` 是一个确定性的假模型，会按关键词决定要不要调工具。整条链路（主循环、
 工具、技能、MCP、RAG）都能在没有网络、没有 key 的情况下跑通，测试和 CI 靠的就是它。
 
+## 用它开新项目
+
+这个仓库是**起点，不是工作区**。建议每个新项目都从一份干净的副本开始，
+而不是在模板里直接改——否则它就不再是模板，下次开新项目没有干净起点。
+
+```bash
+# 路线 A（推荐）：GitHub 网页上点 "Use this template"
+# 生成的仓库不带模板的提交历史
+
+# 路线 B：本地复制后重开历史
+git clone <本仓库地址> my-new-project
+cd my-new-project
+rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起点
+```
+
+新项目里通常只需要改两处：
+
+| 改什么 | 在哪 |
+| --- | --- |
+| 项目名与描述 | `README.md` 标题、`pyproject.toml` 的 `name` / `description` |
+| 版权人 | `LICENSE` |
+
+### 哪些是示例内容，可以放心删
+
+模板里有一批**为了演示而存在**的内容。开新项目时第一件事就是替换它们：
+
+| 路径 | 是什么 | 怎么处理 |
+| --- | --- | --- |
+| `data/knowledge/**` | 19 篇示例知识库（RAG/Agent 工程的实操笔记） | **整体替换**成你自己的文档，再跑 `uv run agent index` |
+| `evals/dataset.jsonl` | 60 条示例评测问题，锚定的是上面那批文档 | 跟着语料一起重写；锚点写错会被自检拦住 |
+| `skills/example-chat-style/` | 示例技能 | 换成你自己的，或直接删掉 |
+| `src/agent_template/mcp/example_server.py` | 示例 MCP server | 可删，同时把 `.env` 里 `AGENT_MCP_SERVERS` 那一项去掉 |
+| `src/agent_template/tools/builtin/` | 示例工具（时间、计算、读文件、列目录） | 前两个是纯演示，可删；文件工具通常保留 |
+| `.agent/` | 运行态数据（索引、记忆、追踪） | 不在版本库里，删掉会自动重建 |
+
+**其余都是核心，不要删**：`llm/`、`tools/registry.py`、`skills/loader.py`、
+`mcp/client.py`、`rag/`、`memory/`、`agent/`、`obs/`、`cli.py`。
+
+### 要不要改包名和命令名
+
+默认包名是 `agent_template`、命令名是 `agent`。多数项目**不用改**——各项目有各自的
+`.venv`，同名并不冲突。只有两种情况需要改：要把它做成产品对外分发，
+或者要把两个 agent 项目装进同一个 Python 环境。
+
+改名要动三处：目录 `src/agent_template/` → `src/你的包名/`、`pyproject.toml` 里的
+`name` 与 `[project.scripts]`、以及所有 `from agent_template ...` 的导入。
+`rg -l agent_template` 能一次列出全部需要改的文件。
+
 ## 一次提问都发生了什么
 
 这是理解整个项目最快的方式。以 `agent ask "RAG 的基本流程分几步？"` 为例：
@@ -355,9 +403,10 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 
 ```
 .
-├─ data/knowledge/          源文档（进 Git）
+├─ data/knowledge/          源文档（示例内容，新项目请替换）
 ├─ skills/                  技能（进 Git）
 │  └─ example-chat-style/SKILL.md
+├─ evals/                   检索评测：数据集 + 评测脚本
 ├─ src/agent_template/
 │  ├─ config.py             全部配置的唯一入口
 │  ├─ cli.py                命令行
@@ -369,6 +418,8 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 │  ├─ rag/                  加载、切块、向量化、存储、检索、索引
 │  ├─ memory/               会话历史
 │  └─ obs/                  追踪与 token 计量
+├─ tests/                   单元测试与循环测试（离线可跑）
+├─ docs/                    架构说明、CLI 说明、路线图
 ├─ .agent/                  运行态数据（不进 Git，可随时删除重建）
 │  ├─ index.sqlite3         向量索引
 │  ├─ memory.sqlite3        会话历史
