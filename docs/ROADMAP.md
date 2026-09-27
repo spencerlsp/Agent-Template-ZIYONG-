@@ -15,7 +15,6 @@
 | --- | --- | --- | --- |
 | 修掉 `obs` 里 logger 名的拼写（`agent.trance` → `agent.trace`） | [obs](../src/agent_template/obs/README.md) | 明确的缺陷，会让日志过滤漏掉这一层 | 五分钟 |
 | `llm` 参数校验兜底：`api_key` 必须是 `str` 而非 `SecretStr` | [llm](../src/agent_template/llm/README.md) | 我们因为传了 `SecretStr` 收到过一个毫无头绪的 401，加一行断言就能把这类错误变成启动即报错 | 十分钟 |
-| 工具并行执行同一轮的多个调用 | [tools](../src/agent_template/tools/README.md)、[agent](../src/agent_template/agent/README.md) | 模型一轮里要调 3 个互不依赖的工具时，现在得排队等 | 半天 |
 | CLI 帮助里说明"全局选项写在子命令之前" | 顶层 | `agent tools -v` 会报错，这是 Click 的语义但不是用户的直觉 | 十分钟 |
 | 按会话聚合 token 统计 | [obs](../src/agent_template/obs/README.md) | 马上就会想问"这次会话一共花了多少" | 半天 |
 
@@ -66,11 +65,10 @@
 
 ## 如果要我排一个顺序
 
-**先做这三件，性价比排序几乎没有争议：**
+**先做这两件，性价比排序几乎没有争议：**
 
 1. **修 obs logger 名 + llm 参数校验** —— 加起来二十分钟，都是消除已知隐患。
-2. **工具并行执行** —— 半天。模型一轮里要调多个互不依赖的工具时，现在得排队等。
-3. **rerank** —— 一天，把答案质量往上抬一个台阶。
+2. **rerank** —— 一天，把答案质量往上抬一个台阶。
 
 **然后按你的实际痛点选：**
 

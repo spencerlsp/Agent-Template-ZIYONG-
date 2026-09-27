@@ -56,6 +56,9 @@ class Tool:
 
     source: str = "local" # `local` or `mcp:<server>`
     schema_override: dict[str, Any] | None = None
+    # 有没有副作用。默认 False 是刻意的保守选择：忘记声明的代价是"慢一点"
+    # （串行执行），而不是"同一轮里两个写操作交错、数据悄出错"。
+    read_only: bool = False
 
     def spec(self) -> ToolSpec:
         """Describe this tool to the model"""
@@ -87,6 +90,7 @@ class ToolRegistry:
             *,
             name: str | None = None,
             description: str | None = None,
+            read_only: bool = False,
     ):
         """ Decorator: @registry.register, with optional name/description override"""
 
@@ -99,6 +103,7 @@ class ToolRegistry:
                 description=description or first_line(fn.__doc__),
                 handler=fn,
                 args_model=args_model_for(tool_name, fn),
+                read_only=read_only, # 透传
             )
 
             return fn
@@ -113,6 +118,7 @@ class ToolRegistry:
         parameters: dict[str, Any],
         handler: Handler,
         source: str = "external",
+        read_only: bool = False
     ) -> None:
         """Register an already-described tool. This is the MCP bridge seam."""
         # """注册一个已经预先定义好描述的工具。这是对接 MCP 的适配层。"""
@@ -123,8 +129,19 @@ class ToolRegistry:
             args_model=RawArguments,
             source=source,
             schema_override=parameters,
+            read_only=read_only,
         )
 
+# ----------------------------------------------------------------------------- 查询
+    def is_parallel_safe(self, name: str) -> bool:
+        """这个工具能不能和同一批次里的其他工具并发执行。
+
+        查不到的工具返回 False：宁可串行，也不能因为"查不到"就把一个
+        可能有副作用的工具扔进并发批次。
+        """
+        tool = self._tools.get(name)
+        return bool(tool and tool.read_only)
+    
 # ------------------------------------------------------------------------- query
     def specs(self) -> list[ToolSpec]:
         return [tool.spec() for tool in self._tools.values()]
@@ -230,3 +247,5 @@ def as_text(result: Any) -> str:
     if isinstance(result, str):
         return result
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
