@@ -21,12 +21,14 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Coroutine
 
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -40,9 +42,49 @@ from agent_template.memory.store import MemoryStore
 from agent_template.rag.indexer import build_index
 from agent_template.skills.loader import SkillsIndex
 
+# --------------------------------------------------------------- 输出编码
+# Windows 上把 stdout 重定向到文件时，Python 默认用**系统区域编码**
+# （中文系统是 GBK），于是 `agent ask "..." > answer.md` 写出来的文件，
+# 在 Git Bash、编辑器、前端里都按 UTF-8 读——结果全是乱码。
+#
+# 这里显式统一成 UTF-8：CLI 的输出是给别的程序读的，不能依赖运行环境的
+# 区域设置。之前我们踩过一次，这类问题排查起来很费时间，所以在入口处堵死。
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        _reconfigure(encoding="utf-8")
+
 # 两条流分开：回答给 stdout，过程给 stderr
 out = Console(file=sys.stdout, highlight=False)
 err = Console(file=sys.stderr, highlight=False, style="dim")
+
+
+def setup_logging(verbose: bool) -> None:
+    """把日志接到 stderr。
+
+    必须显式配置，否则日志会凭空消失：Python 的 root logger 默认级别是
+    WARNING、而且没有任何 handler，于是代码里所有 logger.info / logger.debug
+    都被静默丢掉——而排查问题时最需要的恰恰是那些信息。
+
+    默认只放行 WARNING 以上（保持安静）；--verbose 打开 INFO，正好把
+    "加载了几个技能""RAG 是否就绪""MCP 连上了谁"这类装配信息显示出来。
+
+    日志一律走 stderr：它属于"过程"，不能污染 stdout 里的回答。
+    """
+    handler = RichHandler(
+        console=err,
+        show_path=False,
+        markup=False,
+        rich_tracebacks=False,
+    )
+    # 只留消息本身，时间戳由 RichHandler 自己加
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    root = logging.getLogger()
+    # 先清空：重复添加 handler 会让同一条日志打印两次
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO if verbose else logging.WARNING)
 
 app = typer.Typer(
     add_completion=False,
@@ -261,6 +303,8 @@ def main(
     if version:
         out.print(f"agent-template {__version__}")
         raise typer.Exit()
+
+    setup_logging(verbose)
 
     ctx.obj = Options(
         session=session,
