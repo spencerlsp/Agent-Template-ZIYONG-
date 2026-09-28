@@ -13,12 +13,12 @@
 
 | 事项 | 出处 | 为什么现在做 | 工作量 |
 | --- | --- | --- | --- |
-| CLI 帮助里说明"全局选项写在子命令之前" | 顶层 | `agent tools -v` 会报错，这是 Click 的语义但不是用户的直觉 | 十分钟 |
-| 按会话聚合 token 统计 | [obs](../src/agent_template/obs/README.md) | 马上就会想问"这次会话一共花了多少" | 半天 |
+| 慢 span 告警 | [obs](../src/agent_template/obs/README.md) | 某个工具或某轮模型调用超过阈值时当场提示，比事后翻 `traces.jsonl` 管用 | 两小时 |
 
-> 同一批的另外两件已经完成：`obs` 的 logger 名拼写、`llm` 的 `api_key` 类型兜底
-> （把"毫无头绪的 401"变成启动即报错）。CLI 那条还留着——`docs/cli.md` 和 README 里
-> 都写了，但 `agent --help` 本身还没有，做的时候顺手补上。
+> 同一批的另外三件已经完成：`obs` 的 logger 名拼写、`llm` 的 `api_key` 类型兜底
+> （把"毫无头绪的 401"变成启动即报错）、CLI 里说明"全局选项要写在子命令之前"。
+> 最后这条不止写进了 `--help`——`agent tools -v` 这种摆错位置的情况，会在报错的地方
+> 直接看到提示，不用回头翻文档。
 
 ## 第二波：提升答案质量
 
@@ -31,10 +31,15 @@
 | **小块检索、大块生成** | [rag](../src/agent_template/rag/README.md) | 检索用小片段保精度，命中后把所属完整章节给模型保上下文。需要给片段记"父块 id" | 一天 |
 | 技能触发测试 | [skills](../src/agent_template/skills/README.md) | 技能的失败方式是"模型压根没读它"，静默且难察觉。准备一批"该触发 / 不该触发"的用例，改 `description` 时才有反馈 | 半天 |
 | **上下文压缩（对话摘要）** | [agent](../src/agent_template/agent/README.md)、[memory](../src/agent_template/memory/README.md) | 长对话的主要瓶颈：不压缩就只能砍历史，砍了就前言不搭后语 | 一天 |
-| 换真实 embedding | 顶层 | `local_hash` 只是离线兜底。换 `BAAI/bge-m3` 之类后，检索质量会有台阶式提升 | 十分钟 + 建索引时间 |
 | 工具级统计 | [tools](../src/agent_template/tools/README.md) | 工具一多，"哪个工具模型老用错"是最该看的数据 | 半天 |
 | 成本计量：配单价表 | [llm](../src/agent_template/llm/README.md)、[obs](../src/agent_template/obs/README.md) | token 数字有了，但换算成钱才有决策价值 | 半天 |
 | 结构化输出（`response_format`） | [llm](../src/agent_template/llm/README.md) | `chat()` 已预留参数没人用，适合"必须返回 JSON"的抽取/分类场景 | 半天 |
+
+> 这一波里的**换真实 embedding** 已经完成：本项目 `.env` 用的是 `BAAI/bge-m3`
+> （索引 `meta` 里记的 embedder 就是 `openai_compat:BAAI/bge-m3`，1024 维），
+> [evals/README.md](../evals/README.md) 里的基线数字也都是在它下面测的。
+> 但**模板默认值仍然是 `local_hash`**，这是刻意的——不配 key、不联网也能把整条链路
+> 跑起来；要换真实模型，做法见主 README 的"换成真实 embedding"一节。
 
 ## 第三波：工程化
 
