@@ -9,6 +9,7 @@ import logging
 
 from agent_template.config import Settings
 from agent_template.rag.embeddings import Embedder, build_embedder
+from agent_template.rag.rerank import Reranker, build_reranker
 from agent_template.rag.store import ScoredChunk, VectorStore
 from agent_template.rag.retriever import HybridRetriever
 
@@ -27,11 +28,16 @@ class RagPipeline:
         self.settings = settings
         self.embedder: Embedder = build_embedder(settings)
         self.store = VectorStore(settings.index_path)
+        # 重排器由配置决定：RERANK_PROVIDER 为 none 时拿到的是 NoopReranker，
+        # 检索行为与"还没有重排这回事"时完全一致——默认不改变行为
+        self.reranker: Reranker = build_reranker(settings)
         self.retriever = HybridRetriever(
             store=self.store,
             embedder=self.embedder,
             top_k=settings.rag_top_k,
             candidates=settings.rag_candidates,
+            rerank_candidates=settings.rerank_candidates,
+            reranker=self.reranker,
         )
 
     def ensure_ready(self) -> None:
@@ -63,11 +69,12 @@ class RagPipeline:
         答案里引用出处；没有来源标注，它会把这些片段和自己的记忆混在一起，
         你就无法判断答案到底有没有依据。
 
-        刻意不显示分数：这里的分数是 RRF 融合分（1/(60+名次) 的累加），
-        它只表达相对排名，绝对值没有含义——无论检索质量好坏，都落在
-        0.016~0.033 这个区间。标成"相关度"会让模型误判，实测中它确实
-        据此说过"匹配度很低，覆盖面可能不全"。排名对模型没用、对调试有用，
-        所以分数保留在 ScoredChunk 上，交给 CLI 的调试视图去显示。
+        刻意不显示分数：分数的语义会随配置变化——没接重排时是 RRF 融合分
+        （1/(60+名次) 的累加，无论检索质量好坏都落在 0.016~0.033），接上重排
+        之后又变成重排模型的相似度（0~1，而且每条 query 各有一套标定）。
+        同一个字段在不同配置下含义不同，标成"相关度"会让模型误判，实测中它
+        确实据此说过"匹配度很低，覆盖面可能不全"。排名对模型没用、对调试有用，
+        所以分数保留在 ScoredChunk 上，交给调试视图去显示。
         """
         if not chunks:
             return "（没有检索到相关片段）"
@@ -82,3 +89,4 @@ class RagPipeline:
     async def aclose(self) -> None:
         self.store.close()
         await self.embedder.aclose()
+        await self.reranker.aclose()
