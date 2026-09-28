@@ -20,6 +20,7 @@ Python 3.13+ ｜ uv ｜ MIT ｜ 约 3000 行 Python
 | MCP | `src/agent_template/mcp/` | stdio 客户端 + 随模板附带的示例 server，远端工具与本地工具同表 |
 | RAG | `src/agent_template/rag/` | 加载 → 结构感知切块 → 向量化 → SQLite 存储 → 向量 + BM25 混合检索（RRF 融合） |
 | 主循环 | `src/agent_template/agent/` | 推理/行动循环，事件流输出，会话记忆，同轮工具并发（只读的并发、有副作用的保序） |
+| 工具审批 | `src/agent_template/agent/approval.py` | 有副作用的工具在执行前停下来问人（Human in the loop）；只读工具直接放行 |
 | 可观测 | `src/agent_template/obs/` | 链路追踪（JSONL）+ token 计量 |
 | 命令行 | `src/agent_template/cli.py` | `agent` 命令：对话、单次问答、工具/技能查看、建索引、会话管理 |
 
@@ -103,7 +104,7 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
 | `evals/dataset.jsonl` | 60 条示例评测问题，锚定的是上面那批文档 | 跟着语料一起重写；锚点写错会被自检拦住 |
 | `skills/example-chat-style/` | 示例技能 | 换成你自己的，或直接删掉 |
 | `src/agent_template/mcp/example_server.py` | 示例 MCP server | 可删，同时把 `.env` 里 `AGENT_MCP_SERVERS` 那一项去掉 |
-| `src/agent_template/tools/builtin/` | 示例工具（时间、计算、读文件、列目录） | 前两个是纯演示，可删；文件工具通常保留 |
+| `src/agent_template/tools/builtin/` | 示例工具（时间、计算、读文件、列目录、写文件） | 前两个是纯演示，可删；文件三件套通常保留。其中**写文件是审批机制唯一的触发点**，要么留着当演示，要么替换成你自己的写操作 |
 | `.agent/` | 运行态数据（索引、记忆、追踪） | 不在版本库里，删掉会自动重建 |
 
 **其余都是核心，不要删**：`llm/`、`tools/registry.py`、`skills/loader.py`、
@@ -129,7 +130,7 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
    - 扫描 `skills/` 目录，注册 `load_skill` / `list_skills`（**只把技能目录塞进提示，正文不读**）
    - 打开 RAG，校验索引与当前 embedder 是否匹配；**索引不存在就降级跳过，不阻断启动**
    - 连接 MCP 服务器，把远端工具并进同一张表；**某个 server 起不来只跳过它**
-   - 最终得到一张包含 9 个工具的表
+   - 最终得到一张包含 10 个工具的表
 3. **主循环开始**：读出该会话的历史 → 追加本轮 `user` 消息 → 拼系统提示
    （人设 + 技能目录 + 工具清单）。
 4. **调用模型**（流式）：模型先吐思维链，再吐正文，都通过事件抛给 CLI。
@@ -283,6 +284,7 @@ AGENT_MCP_SERVERS=[{"name":"fs","command":"npx","args":["-y","@modelcontextproto
 | `--json` | 事件流以 JSONL 输出到 stdout |
 | `--model <名字>` | 覆盖 `AGENT_LLM_MODEL` |
 | `--provider <名字>` | 覆盖 `AGENT_LLM_PROVIDER` |
+| `-y, --yes` | 自动批准所有需要确认的工具（脚本、CI 用） |
 | `--version` | 打印版本 |
 
 ### 交互式命令
