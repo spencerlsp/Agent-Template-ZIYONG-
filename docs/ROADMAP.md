@@ -13,8 +13,6 @@
 
 | 事项 | 出处 | 为什么现在做 | 工作量 |
 | --- | --- | --- | --- |
-| 修掉 `obs` 里 logger 名的拼写（`agent.trance` → `agent.trace`） | [obs](../src/agent_template/obs/README.md) | 明确的缺陷，会让日志过滤漏掉这一层 | 五分钟 |
-| `llm` 参数校验兜底：`api_key` 必须是 `str` 而非 `SecretStr` | [llm](../src/agent_template/llm/README.md) | 我们因为传了 `SecretStr` 收到过一个毫无头绪的 401，加一行断言就能把这类错误变成启动即报错 | 十分钟 |
 | CLI 帮助里说明"全局选项写在子命令之前" | 顶层 | `agent tools -v` 会报错，这是 Click 的语义但不是用户的直觉 | 十分钟 |
 | 按会话聚合 token 统计 | [obs](../src/agent_template/obs/README.md) | 马上就会想问"这次会话一共花了多少" | 半天 |
 
