@@ -14,6 +14,15 @@
 
 一个刻意的克制：**日志里不写正文**（不记 prompt 全文、不记模型回答），
 只记元信息。日志中混入用户内容，在产品环境里就是隐私问题。
+
+span 的字段分两部分：
+    * **信封**：name / trace_id / span_id / started_at / ts / duration_ms / status /
+      error / attributes —— 每一行都一样，所以按行 grep、按字段聚合都不需要特判；
+    * **载荷**：`attributes` 里放这次操作特有的东西（`llm.turn` 有 step 和 token，
+      `tool.call` 有工具名）。
+
+像 session / run 这种"每个 span 都该有"的字段走 `set_context()` 注入，不在调用点
+手写——手写的地方迟早会漏，而漏了要等聚合时才发现数据不全。
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -39,6 +49,11 @@ class TraceSpan:
     # 每个span自己的短标识
     span_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     started_at: float = field(default_factory=time.time)
+    # 人看的那个时间。started_at 是 epoch 浮点（1790564685.7482283），
+    # 排序和计算好用，grep 和肉眼不友好，所以两个都留着。
+    ts: str = field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
     duration_ms: float = 0.0
     # ok 或 error
     status: str = "ok"
@@ -48,12 +63,29 @@ class TraceSpan:
 
 class Tracer:
     """收集一次运行中的所有span, 可选的追加写入JSONL文件。"""
-    def __init__(self, path: Path | None = None, trace_id: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        trace_id: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         self.trace_id = trace_id or uuid.uuid4().hex[:12]
         self.path = path
         # 内存里留一份，方便测试直接断言：文件那份是给人看的
         self.spans: list[TraceSpan] = []
+        # 每个 span 都该带的字段（session / run …）。放在这里而不是让每个
+        # 调用点自己写：漏一个地方，聚合时那份数据就是残的。
+        self.context: dict[str, Any] = dict(context or {})
 
+    def set_context(self, **fields: Any) -> None:
+        """更新公共上下文，同名键覆盖。
+
+        知道当前的会话和"这一轮问答"，span 才能被事后聚合出"哪个会话、哪一步贵"。
+
+        注意这是**进程内共享**的状态，前提是同一时刻只跑一轮对话（CLI 的用法）。
+        将来要并发跑多个会话，得换成 `contextvars` 或者把上下文显式传给 `span()`。
+        """
+        self.context.update(fields)
 
     @contextmanager
     def span(self, name: str, **attributes: Any) -> Iterator[TraceSpan]:
@@ -66,7 +98,11 @@ class Tracer:
         异常照常向外抛——这里只做记录，不吞异常。吞掉的话，调用方
         就再也拿不到失败信号了，那是比没有日志更糟的事。
         """
-        span = TraceSpan(name=name, trace_id=self.trace_id, attributes=attributes)
+        # 公共上下文在前、本次调用的属性在后：同名时以本次调用为准，
+        # 这样 `span("tool.call", tool=...)` 里的 tool 不会被上下文里的键盖掉
+        span = TraceSpan(
+            name=name, trace_id=self.trace_id, attributes={**self.context, **attributes}
+        )
         started = time.perf_counter()
         try:
             yield span
