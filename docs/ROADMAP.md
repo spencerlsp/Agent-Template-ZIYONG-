@@ -16,13 +16,18 @@
 | CLI 帮助里说明"全局选项写在子命令之前" | 顶层 | `agent tools -v` 会报错，这是 Click 的语义但不是用户的直觉 | 十分钟 |
 | 按会话聚合 token 统计 | [obs](../src/agent_template/obs/README.md) | 马上就会想问"这次会话一共花了多少" | 半天 |
 
+> 同一批的另外两件已经完成：`obs` 的 logger 名拼写、`llm` 的 `api_key` 类型兜底
+> （把"毫无头绪的 401"变成启动即报错）。CLI 那条还留着——`docs/cli.md` 和 README 里
+> 都写了，但 `agent --help` 本身还没有，做的时候顺手补上。
+
 ## 第二波：提升答案质量
 
 这一天到两天的投入会直接反映在回答质量上，建议按顺序做。
 
 | 事项 | 出处 | 为什么 | 工作量 |
 | --- | --- | --- | --- |
-| **检索重排（rerank）** | [rag](../src/agent_template/rag/README.md) | 两路各取 20 个候选后加一层 rerank 模型重新打分，**通常是检索质量提升最大的一步**，比换更大的 embedding 模型还划算 | 一天 |
+| **给 rerank 定候选数** | [rag](../src/agent_template/rag/README.md)、[evals](../evals/README.md) | 重排已经接上（MRR 0.792 → 0.936），但 `AGENT_RERANK_CANDIDATES=20` 是从 `rag_candidates` 抄来的、没验过。降到 10 / 5 各跑一遍评测和延迟基准，找"MRR 开始掉"的拐点 | 两小时 |
+| **加难评测集** | [evals](../evals/README.md) | 当前 60 条用例 Recall 已经 1.000，**指标饱和的评测集比没有评测集更危险**——它会给你"已经很好"的错觉。补跨文档多跳、口语化改写、带指代的追问 | 半天 |
 | **小块检索、大块生成** | [rag](../src/agent_template/rag/README.md) | 检索用小片段保精度，命中后把所属完整章节给模型保上下文。需要给片段记"父块 id" | 一天 |
 | 技能触发测试 | [skills](../src/agent_template/skills/README.md) | 技能的失败方式是"模型压根没读它"，静默且难察觉。准备一批"该触发 / 不该触发"的用例，改 `description` 时才有反馈 | 半天 |
 | **上下文压缩（对话摘要）** | [agent](../src/agent_template/agent/README.md)、[memory](../src/agent_template/memory/README.md) | 长对话的主要瓶颈：不压缩就只能砍历史，砍了就前言不搭后语 | 一天 |
@@ -66,7 +71,9 @@
 **先做这两件，性价比排序几乎没有争议：**
 
 1. **修 obs logger 名 + llm 参数校验** —— 加起来二十分钟，都是消除已知隐患。
-2. **rerank** —— 一天，把答案质量往上抬一个台阶。
+2. **给 rerank 定候选数 + 加难评测集** —— 加起来半天。重排已经落地
+   （MRR 0.792 → 0.936），但评测集已经饱和：**不加难就分不清"改好了"和"本来就满分"**，
+   后面的所有优化都会失去反馈。
 
 **然后按你的实际痛点选：**
 

@@ -18,7 +18,8 @@ Python 3.13+ ｜ uv ｜ MIT ｜ 约 3000 行 Python
 | 函数调用 | `src/agent_template/tools/` | 普通函数 + 类型注解 → 自动生成 JSON Schema，参数校验和超时都在这一层 |
 | 技能 | `src/agent_template/skills/` | `SKILL.md` + 渐进式披露：提示里只放目录，正文按需读取 |
 | MCP | `src/agent_template/mcp/` | stdio 客户端 + 随模板附带的示例 server，远端工具与本地工具同表 |
-| RAG | `src/agent_template/rag/` | 加载 → 结构感知切块 → 向量化 → SQLite 存储 → 向量 + BM25 混合检索（RRF 融合） |
+| RAG | `src/agent_template/rag/` | 加载 → 结构感知切块 → 向量化 → SQLite 存储 → 向量 + BM25 混合检索（RRF 融合）→ 可选重排 |
+| 检索评测 | `evals/` | 60 条标注问题算 Recall / HitRate / MRR，外加一个延迟基准；改检索前后用它对比 |
 | 主循环 | `src/agent_template/agent/` | 推理/行动循环，事件流输出，会话记忆，同轮工具并发（只读的并发、有副作用的保序） |
 | 工具审批 | `src/agent_template/agent/approval.py` | 有副作用的工具在执行前停下来问人（Human in the loop）；只读工具直接放行 |
 | 可观测 | `src/agent_template/obs/` | 链路追踪（JSONL）+ token 计量 |
@@ -126,7 +127,7 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
 
 1. **CLI 解析参数** → 合成 `Settings`。优先级：命令行参数 > 环境变量 > `.env` > 代码默认值。
 2. **装配运行时** `AgentRuntime.create()`：
-   - 注册内置工具（时间、计算、读文件、列目录）
+   - 注册内置工具（时间、计算、读文件、列目录、写文件）
    - 扫描 `skills/` 目录，注册 `load_skill` / `list_skills`（**只把技能目录塞进提示，正文不读**）
    - 打开 RAG，校验索引与当前 embedder 是否匹配；**索引不存在就降级跳过，不阻断启动**
    - 连接 MCP 服务器，把远端工具并进同一张表；**某个 server 起不来只跳过它**
@@ -193,6 +194,9 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
 > [memory](src/agent_template/memory/README.md) ｜
 > [agent](src/agent_template/agent/README.md) ｜
 > [obs](src/agent_template/obs/README.md)
+>
+> 评估那一层单独一份：[evals/README.md](evals/README.md) —— 指标公式（Recall / HitRate /
+> MRR 怎么算）、数据集怎么写、延迟分位数怎么读。
 
 ## 配置
 
@@ -236,6 +240,19 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
 | `AGENT_CHUNK_OVERLAP` | `80` | 相邻片段的重叠长度 |
 | `AGENT_RAG_TOP_K` | `4` | 最终返回给模型的片段数 |
 | `AGENT_RAG_CANDIDATES` | `20` | 每一路检索先取多少候选再融合 |
+
+### 重排（可选，默认关闭）
+
+开启后，融合出的候选先过一遍重排模型再取 `AGENT_RAG_TOP_K` 条。实测 MRR 0.792 → 0.936，
+代价是每次检索 p50 从 108ms 升到 405ms（详见 [evals/README.md](evals/README.md)）。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AGENT_RERANK_PROVIDER` | `none` | `none`（不重排）或 `openai_compat` |
+| `AGENT_RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | 重排模型名 |
+| `AGENT_RERANK_BASE_URL` | `https://api.siliconflow.cn/v1` | rerank 端点（**不是** OpenAI 协议的一部分，只是各家形状相同） |
+| `AGENT_RERANK_API_KEY` | 空 | 重排服务的 key |
+| `AGENT_RERANK_CANDIDATES` | `20` | 送去重排的候选条数；越大越慢越贵 |
 
 ### 路径与 MCP
 
@@ -374,6 +391,20 @@ AGENT_EMBEDDING_API_KEY=sk-...
 然后**必须重建索引**：`uv run agent index`。换模型不重建，检索结果会静默全错——
 所以索引里记了 embedder 名字和维度，启动时不一致会直接报错并提示重建。
 
+### 开启重排
+
+重排是"召回之后、送给模型之前"的一道精排，默认关闭。打开只需配置：
+
+```ini
+AGENT_RERANK_PROVIDER=openai_compat
+AGENT_RERANK_MODEL=BAAI/bge-reranker-v2-m3
+AGENT_RERANK_BASE_URL=https://api.siliconflow.cn/v1
+AGENT_RERANK_API_KEY=sk-...
+```
+
+实测 MRR 0.792 → 0.936，代价是每次检索多约 300ms。改检索相关代码前，先用
+`uv run python evals/run_eval.py` 量一遍，别靠感觉判断改好了还是改坏了。
+
 ### 换向量库
 
 替换 `rag/store.py` 里的 `VectorStore` 一个类即可，上层只依赖
@@ -408,7 +439,10 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 ├─ data/knowledge/          源文档（示例内容，新项目请替换）
 ├─ skills/                  技能（进 Git）
 │  └─ example-chat-style/SKILL.md
-├─ evals/                   检索评测：数据集 + 评测脚本
+├─ evals/                   检索评测：数据集 + 指标脚本 + 延迟基准
+│  ├─ dataset.jsonl         标注问题集（示例内容，新项目请替换）
+│  ├─ run_eval.py           Recall / HitRate / MRR
+│  └─ bench_search.py       延迟分位数（p50 / p95）
 ├─ src/agent_template/
 │  ├─ config.py             全部配置的唯一入口
 │  ├─ cli.py                命令行
@@ -417,7 +451,7 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 │  ├─ tools/                工具登记表 + 内置工具
 │  ├─ skills/               SKILL.md 加载与按需读取
 │  ├─ mcp/                  MCP 客户端、工具桥接、示例 server
-│  ├─ rag/                  加载、切块、向量化、存储、检索、索引
+│  ├─ rag/                  加载、切块、向量化、存储、检索、重排、索引
 │  ├─ memory/               会话历史
 │  └─ obs/                  追踪与 token 计量
 ├─ tests/                   单元测试与循环测试（离线可跑）
@@ -440,7 +474,9 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 | `ZoneInfo("UTC")` 报 `ZoneInfoNotFoundError` | Windows 不自带 IANA 时区库 | 依赖里加了 `tzdata`，并在工具里做本地时钟降级 |
 | `agent tools -v` 报 `No such option: -v` | Click 的全局选项必须在子命令之前 | 用 `agent -v tools` |
 | 换了 embedding 模型后检索结果全乱 | 索引与查询向量维度/语义不一致 | 索引里记录 embedder 与维度，启动时校验并提示重建 |
-| 模型说"相关度只有 0.03，匹配度很低" | RRF 分数只表示排名，绝对值无意义 | 给模型的上下文里不再显示分数 |
+| 模型说"相关度只有 0.03，匹配度很低" | 给它的分数是 RRF 融合分，只表示排名，绝对值无意义 | 给模型的上下文里不再显示分数 |
+| 开了重排却感觉不到变化 | 重排失败会静默回退到融合顺序，数字就退回没重排的水平 | 看日志里的 `重排失败，回退到融合顺序`；`evals/bench_search.py` 会把回退次数单独打出来 |
+| 重排的相关度分数不能拿来和 RRF 分比 | 两者量纲完全不同（0~1 vs 0.016~0.033），且重排分数每条 query 各自标定 | 只用它排序，不做跨 query 比较、不设固定阈值 |
 | 片段以"料塞进权重里"开头、以标题结尾 | 字符滑窗切分不尊重文档结构 | 改为结构感知切分 + 标题路径 + 句子边界对齐 |
 | 多轮对话报消息顺序非法 | 历史裁剪把 `tool_calls` 与结果拆散了 | 裁剪窗口对齐到 `user` 消息边界 |
 | `sqlite3` 报 `uses 1, and there are 5 supplied` | `(value)` 不是元组，字符串被逐字符展开 | 写成 `(value,)`，或改用命名参数 |
@@ -452,6 +488,8 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 ```bash
 uv run pytest                 # 跑测试
 uv run agent -v tools         # 带日志查看装配结果
+uv run python evals/run_eval.py   # 检索质量：Recall / HitRate / MRR
+uv run python evals/bench_search.py --repeat 3   # 检索延迟：p50 / p95
 uv run python -m agent_template.cli --help
 ```
 
@@ -465,7 +503,8 @@ uv run python -m agent_template.cli --help
 ## 路线图
 
 - 可插拔的向量库后端（Qdrant / pgvector / sqlite-vec）
-- 检索重排（bge-reranker 之类的 rerank 模型）
+- 更难的评测集（跨文档多跳、口语化改写），并把基线数字钉进 CI 做回归保护
+- 小块检索、大块生成（检索用小块保精度，送模型用完整章节保上下文）
 - 多知识库（按名字隔离多套索引）
 - 带权限控制的数据库工具（只读、SQL 白名单）
 - OpenAI 兼容的 HTTP 接口，方便直接接现成聊天前端

@@ -31,6 +31,9 @@ def settings(tmp_path: Path) -> Settings:
         workspace_root=Path("."),
         # 清空默认的示例 MCP 服务器：单元测试不该拉起子进程
         mcp_servers=[],
+        # 显式关掉重排：单元测试不该发真实网络请求。不加这行的话，开发机
+        # .env 里打开 AGENT_RERANK_PROVIDER 后，用到检索的用例会悄悄去打真接口
+        rerank_provider="none",
     )
 
 

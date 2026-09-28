@@ -26,6 +26,7 @@ import numpy as np
 
 from agent_template.rag.embeddings import Embedder, tokenize
 from agent_template.rag.store import ScoredChunk, VectorStore
+from agent_template.rag.rerank import NoopReranker, RerankError, Reranker
 
 logger = logging.getLogger("agent.rag")
 
@@ -176,6 +177,11 @@ class HybridRetriever:
         *,
         top_k: int = 4,
         candidates: int = 20,
+        # 新增：送去重排前先取多少条融合候选。和 candidates 分开是因为
+        # 两个数受不同约束——candidates 受"别漏掉另一路的高位片段"约束，
+        # rerank_candidates 受"重排要逐条打分，越慢越贵"约束。
+        rerank_candidates: int = 20,
+        reranker: Reranker | None = None,
         rrf_k: int = 60,
     ) -> None:
         self.store = store
@@ -184,6 +190,8 @@ class HybridRetriever:
         # 每路先取这么多候选再融合。取太少会漏掉"另一路排得高"的片段，
         # 取太多则把噪声也带进来。20 是个稳妥的起点。
         self.candidates = candidates
+        self.reranker = reranker or NoopReranker()
+        self.rerank_candidates = rerank_candidates
         self.rrf_k = rrf_k
 
         self._loaded = False
@@ -209,7 +217,13 @@ class HybridRetriever:
         logger.debug("检索器已加载 %d 个片段", len(ids))
 
     async def search(self, query: str, top_k: int | None = None) -> list[ScoredChunk]:
-        """检索：两路各取候选，RRF 融合后返回前 top_k 个片段。"""
+        """检索：两路各取候选 → RRF 融合 → （可选）重排 → 返回前 top_k 个片段。
+
+        两道排序的分工不同：融合负责"把两路都看好的片段提上来"，重排负责
+        "在候选池里把最贴问题的顶到最前"。重排是加分项而不是必需品，
+        所以它失败时只降级成"按融合顺序取前 top_k 条"，不让整次检索报错——
+        这也是 Reranker 契约里"抛 RerankError、由调用方决定要不要降级"的兑现处。
+        """
         self._ensure_loaded()
         limit = top_k or self.top_k
         if not self._ids:
@@ -219,21 +233,44 @@ class HybridRetriever:
         keyword_ranking = self._keyword_ranking(query)
 
         fused = reciprocal_rank_fusion([vector_ranking, keyword_ranking], k=self.rrf_k)
-        ordered = sorted(fused.items(), key=lambda item: -item[1])[: limit]
+        # 融合分只表达名次，按它排出候选池。下面两个分支都要用这一份，
+        # 所以先排好、别在回退分支里重算第二遍
+        ranked = sorted(fused.items(), key=lambda item: -item[1])
 
+        # 先记调试信息：重排成功会提前 return，放到函数末尾它就永远是空的
         self.last_debug = {
             "vector": [self._ids[i] for i in vector_ranking[: limit]],
             "keyword": [self._ids[i] for i in keyword_ranking[:limit]],
         }
-        return [
-            ScoredChunk(
-                id=self._ids[index],
-                source=self._sources[index],
-                text=self._texts[index],
-                score=score,
+
+        def to_chunks(pairs: list[tuple[int, float]]) -> list[ScoredChunk]:
+            """把 (下标, 分数) 还原成 ScoredChunk。
+
+            抽成局部函数是为了让"重排成功"和"重排失败回退"两条路径共用同一段
+            还原逻辑——抄两份的话，以后改一处漏一处，两边就不再等价了。
+            """
+            return [
+                ScoredChunk(
+                    id=self._ids[index],
+                    source=self._sources[index],
+                    text=self._texts[index],
+                    score=score,
+                )
+                for index, score in pairs
+            ]
+
+        # 送去重排的是融合序排出来的前 rerank_candidates 条（比 limit 大，
+        # 给重排留出"把正确的从第 8 名捞到第 1 名"的空间）
+        try:
+            return await self.reranker.rerank(
+                query=query,
+                candidates=to_chunks(ranked[: self.rerank_candidates]),
+                top_k=limit,
             )
-            for index, score in ordered
-        ]
+        except RerankError as exc:
+            logger.warning("重排失败，回退到融合顺序：%s", exc)
+            return to_chunks(ranked[:limit])
+
 
     
     async def _vector_ranking(self, query: str) -> list[int]:
@@ -260,5 +297,4 @@ class HybridRetriever:
         scores = self._bm25.scores(tokenize(query))
         order = np.argsort(-scores)
         return [int(i) for i in order if scores[i] > 0][: self.candidates]
-
 

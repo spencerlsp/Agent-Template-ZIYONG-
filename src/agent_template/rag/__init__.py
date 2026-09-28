@@ -11,6 +11,14 @@ from agent_template.rag.store import EmbeddingMismatch, ScoredChunk, VectorStore
 from agent_template.rag.pipeline import RagNotReady, RagPipeline
 from agent_template.rag.retriever import BM25, HybridRetriever, reciprocal_rank_fusion
 from agent_template.rag.tools import register_rag_tools
+from agent_template.rag.rerank import (
+    NoopReranker,
+    OpenAICompatReranker,
+    RerankError,
+    Reranker,
+    build_reranker,
+)
+
 
 __all__ = [
     "Chunk",
@@ -31,5 +39,7 @@ __all__ = [
     "BM25",
     "HybridRetriever",
     "reciprocal_rank_fusion",
-    "register_rag_tools"
+    "register_rag_tools",
+    "OpenAICompatReranker",
+    "RerankError"
 ]

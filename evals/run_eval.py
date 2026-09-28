@@ -40,6 +40,7 @@ from rich.table import Table
 # ---------------------------------------------------------------- 本项目
 from agent_template.config import Settings
 from agent_template.rag.embeddings import build_embedder
+from agent_template.rag.rerank import build_reranker
 from agent_template.rag.retriever import HybridRetriever
 from agent_template.rag.store import VectorStore
 
@@ -49,7 +50,19 @@ console = Console()
 EVAL_DIR = Path(__file__).resolve().parent
 
 MODES = ("vector", "keyword", "hybrid")
-MODE_LABELS = {"vector": "纯向量", "keyword": "纯关键词", "hybrid": "融合(RRF)"}
+
+
+def mode_labels(settings: Settings | None = None) -> dict[str, str]:
+    """三路模式的显示名。
+
+    融合那一列的名字要跟着配置走：开了重排还写"融合(RRF)"，终端和
+    提交进 Git 的报告都会误导读者——他会以为这份数字是纯 RRF 的结果，
+    而实际中间多了一层重排。
+    """
+    hybrid = "融合(RRF)"
+    if settings is not None and settings.rerank_provider != "none":
+        hybrid = "融合(RRF+重排)"
+    return {"vector": "纯向量", "keyword": "纯关键词", "hybrid": hybrid}
 
 
 # ================================================================== 数据集
@@ -268,6 +281,10 @@ async def evaluate(
     """对全部用例跑一遍，返回 {模式: 结果列表}。"""
     embedder = build_embedder(settings)
     store = VectorStore(settings.index_path)
+    # 重排器也跟着配置走：默认 none 时拿到 Noop，此时"融合"列与旧基线可比；
+    # 配了重排，这一列量的就是"融合 + 重排"的效果。纯向量/纯关键词两列不受影响，
+    # 因为那两列直接取 _vector_ranking / _keyword_ranking，不经过 search()
+    reranker = build_reranker(settings)
 
     try:
         # 先做一致性自检：换了 embedding 却没重建索引时，这里会直接报错，
@@ -279,6 +296,8 @@ async def evaluate(
             embedder,
             top_k=settings.rag_top_k,
             candidates=settings.rag_candidates,
+            rerank_candidates=settings.rerank_candidates,
+            reranker=reranker,
         )
         # 触发懒加载：把全库读进内存并建好 BM25。之后 _texts 才可用。
         retriever._ensure_loaded()
@@ -293,11 +312,16 @@ async def evaluate(
     finally:
         store.close()
         await embedder.aclose()
+        await reranker.aclose()
 
 
 # ================================================================== 输出
 def render_summary(
-    metrics: dict[str, Metrics], top_k: int, case_count: int, gold_count: int
+    metrics: dict[str, Metrics],
+    top_k: int,
+    case_count: int,
+    gold_count: int,
+    labels: dict[str, str],
 ) -> None:
     """三路对比总表。"""
     table = Table(
@@ -312,7 +336,7 @@ def render_summary(
     for mode in MODES:
         item = metrics[mode]
         table.add_row(
-            MODE_LABELS[mode],
+            labels[mode],
             f"{item.recall:.3f}",
             f"{item.hit_rate:.3f}",
             f"{item.mrr:.3f}",
@@ -321,7 +345,9 @@ def render_summary(
     console.print(table)
 
 
-def render_by_kind(collected: dict[str, list[CaseResult]], top_k: int) -> None:
+def render_by_kind(
+    collected: dict[str, list[CaseResult]], top_k: int, labels: dict[str, str]
+) -> None:
     """按问题类型拆分（只看融合模式）。
 
     平均值容易被个别用例带偏，分桶之后规律才显出来：比如「术语精确」全中、
@@ -329,7 +355,7 @@ def render_by_kind(collected: dict[str, list[CaseResult]], top_k: int) -> None:
     """
     kinds = sorted({result.case.kind for result in collected["hybrid"]})
 
-    table = Table(title="按问题类型拆分（融合模式）", header_style="bold")
+    table = Table(title=f"按问题类型拆分（{labels['hybrid']}）", header_style="bold")
     table.add_column("类型", style="cyan")
     table.add_column("用例数", justify="right")
     table.add_column(f"Recall@{top_k}", justify="right")
@@ -341,14 +367,14 @@ def render_by_kind(collected: dict[str, list[CaseResult]], top_k: int) -> None:
     console.print(table)
 
 
-def render_details(collected: dict[str, list[CaseResult]]) -> None:
+def render_details(collected: dict[str, list[CaseResult]], labels: dict[str, str]) -> None:
     """逐条结果：命中的显示「√ 条数 @首个命中排名」，未命中显示「×」。"""
     table = Table(title="逐条结果（√ 命中条数 / 标准答案条数 @首次命中排名）", header_style="bold")
     table.add_column("用例", style="cyan", no_wrap=True)
     table.add_column("问题", overflow="fold", max_width=32)
     table.add_column("类型", no_wrap=True)
     for mode in MODES:
-        table.add_column(MODE_LABELS[mode], justify="center", no_wrap=True)
+        table.add_column(labels[mode], justify="center", no_wrap=True)
 
     for index in range(len(collected["hybrid"])):
         case = collected["hybrid"][index].case
@@ -395,6 +421,7 @@ def write_report(
     metrics: dict[str, Metrics],
     collected: dict[str, list[CaseResult]],
     top_k: int,
+    labels: dict[str, str],
 ) -> None:
     """把结果写成 Markdown，便于提交进 Git 对比不同版本的数字。"""
     lines: list[str] = [
@@ -405,7 +432,7 @@ def write_report(
         f"- 标准答案数：{metrics['hybrid'].gold}",
         f"- top-k：{top_k}",
         "",
-        f"## 三路对比（@top-{top_k}）",
+        f"## 三路对比（@top-{top_k}｜{labels['hybrid']}）",
         "",
         "| 模式 | Recall | HitRate | MRR |",
         "| --- | ---: | ---: | ---: |",
@@ -414,7 +441,7 @@ def write_report(
     for mode in MODES:
         item = metrics[mode]
         lines.append(
-            f"| {MODE_LABELS[mode]} | {item.recall:.3f} | {item.hit_rate:.3f} | {item.mrr:.3f} |"
+            f"| {labels[mode]} | {item.recall:.3f} | {item.hit_rate:.3f} | {item.mrr:.3f} |"
         )
 
     lines += ["", "## 逐条结果", "", "| 用例 | 问题 | 类型 | 纯向量 | 纯关键词 | 融合 |", "| --- | --- | --- | --- | --- | --- |"]
@@ -469,17 +496,18 @@ def main() -> None:
 
     collected = asyncio.run(evaluate(cases, settings, args.top_k))
     metrics = {mode: summarise(mode, collected[mode]) for mode in MODES}
+    labels = mode_labels(settings)
 
-    render_summary(metrics, args.top_k, len(cases), metrics["hybrid"].gold)
-    render_by_kind(collected, args.top_k)
+    render_summary(metrics, args.top_k, len(cases), metrics["hybrid"].gold, labels)
+    render_by_kind(collected, args.top_k, labels)
     render_exclusive(collected)
 
     if args.verbose:
-        render_details(collected)
+        render_details(collected, labels)
 
     if args.write_report:
         target = EVAL_DIR / "report.md"
-        write_report(target, metrics, collected, args.top_k)
+        write_report(target, metrics, collected, args.top_k, labels)
         console.print(f"\n报告已写入：{target}")
 
 
