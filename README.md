@@ -143,8 +143,10 @@ rm -rf .git && git init -b main    # 丢掉模板历史，作为新项目的起�
 6. **再次调用模型**，此时它带着工具的真实返回值作答，并在答案里标注来源。
 7. **没有 `tool_calls` 了** → 抛 `finished` 事件，这一轮结束。若一直在调工具，
    到 `AGENT_MAX_STEPS` 步仍未收敛则报错退出。
-8. **全程记录**：`Tracer` 记下每个 span 的耗时与成败（写 `.agent/traces.jsonl`），
-   `TokenAccountant` 累计 token 用量。
+8. **全程记录**：`Tracer` 记下每个 span 的耗时与成败（写 `.agent/traces.jsonl`）。
+   每个 span 都带着当前**会话**和**轮次**，模型调用那个 span 里还记着本次的
+   输入/输出 token——所以事后能按会话聚合出"哪个会话、哪一轮贵"
+   （`uv run python scripts/usage.py` 就是读它）。
 9. **CLI 渲染**：回答写 stdout，工具调用/用量/思考摘要写 stderr。
    所以 `agent ask "..." > answer.md` 得到的文件里只有回答。
 
@@ -291,7 +293,7 @@ AGENT_MCP_SERVERS=[{"name":"fs","command":"npx","args":["-y","@modelcontextproto
 ### 全局选项
 
 > 全局选项要写在**子命令之前**：`agent -v tools`，不是 `agent tools -v`
-> （Click 的标准语义）。
+> （Click 的标准语义。写错位置时 CLI 会在报错里直接提醒，不用回头翻文档。）
 
 | 选项 | 作用 |
 | --- | --- |
@@ -443,6 +445,8 @@ CLI 和前端消费的是同一套事件，渲染逻辑各写各的，核心一�
 │  ├─ dataset.jsonl         标注问题集（示例内容，新项目请替换）
 │  ├─ run_eval.py           Recall / HitRate / MRR
 │  └─ bench_search.py       延迟分位数（p50 / p95）
+├─ scripts/                 独立小工具（不进运行时链路）
+│  └─ usage.py              从 traces.jsonl 聚合 token 用量（按会话 / 按轮次）
 ├─ src/agent_template/
 │  ├─ config.py             全部配置的唯一入口
 │  ├─ cli.py                命令行
@@ -490,6 +494,7 @@ uv run pytest                 # 跑测试
 uv run agent -v tools         # 带日志查看装配结果
 uv run python evals/run_eval.py   # 检索质量：Recall / HitRate / MRR
 uv run python evals/bench_search.py --repeat 3   # 检索延迟：p50 / p95
+uv run python scripts/usage.py    # token 用量：按会话 / 按轮次归因
 uv run python -m agent_template.cli --help
 ```
 

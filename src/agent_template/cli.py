@@ -27,6 +27,15 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Coroutine
 
 import typer
+
+# Typer 0.27 起把 click 收进了自己内部（`typer._click`），所以命令行里真正抛出的
+# `NoSuchOption` 不是 `click.NoSuchOption` 那个类——我们实测过：用 click 的名字去
+# 捕获会一条都拦不到。这里优先取 Typer 内部那个，并留一条回退，以防将来它换回来。
+try:
+    from typer._click.exceptions import NoSuchOption
+except ImportError:  # pragma: no cover - 只为兼容将来的 Typer
+    from click.exceptions import NoSuchOption
+
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -93,11 +102,45 @@ def setup_logging(verbose: bool) -> None:
     root.addHandler(handler)
     root.setLevel(logging.INFO if verbose else logging.WARNING)
 
+class GlobalOptionHint(typer.core.TyperGroup):
+    """在"全局选项写到子命令后面"这个最常见的误用上给一句人话提示。
+
+    Click 的原话只有 `No such option: -v`，看不出问题出在**位置**上——而
+    `agent tools -v` 几乎是每个人第一次都会试的写法（毕竟绝大多数命令行工具
+    都允许选项随意摆放）。帮助文本里写了提示，但真正出错的那一刻才最需要它。
+
+    为什么拦在 `invoke` 而不是 `parse_args`：
+
+    * 全局那层的解析错误（比如 `agent --bogus`）发生在 `invoke` 之前——那种情况
+      选项本来就摆在正确的位置上，只是拼错了，提示"要写在子命令之前"是误导；
+    * 子命令那层的解析正是在 `invoke` 内部发生的（Click 先解析全局部分、resolve
+      出子命令，再让子命令解析剩下的参数），那才是真的把位置写错了。
+    所以只拦后者，提示才准确。
+    """
+
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except NoSuchOption as exc:
+            exc.message = (
+                f"{exc.message}\n"
+                "提示：全局选项（-s / -v / --json / --model / --provider / -y …）"
+                "要写在子命令之前——`agent -v tools`，而不是 `agent tools -v`。"
+            )
+            raise
+
+
 app = typer.Typer(
+    cls=GlobalOptionHint,
     add_completion=False,
     # 不加子命令时进入对话，而不是打印帮助——这是最常用的入口
     no_args_is_help=False,
-    help="本地开发 agent：对话、工具、技能、MCP、RAG 都在这里。",
+    help=(
+        "本地开发 agent：对话、工具、技能、MCP、RAG 都在这里。\n\n"
+        "全局选项（-s / -v / --json / --model / --provider / -y …）要写在子命令之前："
+        "`agent -v tools`，不是 `agent tools -v`。这是 Click 的语义——子命令之后的选项"
+        "属于那个子命令，摆错位置会直接报 `No such option`。"
+    ),
 )
 
 

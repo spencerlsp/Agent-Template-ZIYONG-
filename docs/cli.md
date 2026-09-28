@@ -20,7 +20,8 @@ agent sessions --clear X  清空会话 X 的历史
 ## 全局选项
 
 > **全局选项必须写在子命令之前**：`agent -v tools` ✅ ／ `agent tools -v` ❌
-> （这是 Click 的标准语义。写错时会报 `No such option: -v`。）
+> （这是 Click 的标准语义。写错时会报 `No such option: -v`，并在报错里直接提醒你
+> 该把选项挪到前面——`agent --help` 的顶部也写了同一条。）
 
 | 选项 | 简写 | 作用 |
 | --- | --- | --- |

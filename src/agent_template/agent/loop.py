@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, AsyncIterator
 
@@ -28,7 +29,7 @@ from agent_template.agent.prompts import build_system_prompt
 from agent_template.config import Settings
 from agent_template.llm.base import LLMClient, Message, Usage, ToolCall
 from agent_template.memory.store import MemoryStore
-from agent_template.obs.tracing import TokenAccountant, Tracer
+from agent_template.obs.tracing import TokenAccountant, TraceSpan, Tracer
 from agent_template.skills.loader import SkillsIndex
 from agent_template.tools.registry import ToolRegistry
 from agent_template.agent.approval import (
@@ -74,6 +75,14 @@ class AgentLoop:
         """跑一轮完整对话，把过程以事件形式抛出去。"""
         use_stream = self.settings.stream if stream is None else stream
 
+        # 一次问答一个 run_id：同一个进程里可能跑很多轮，
+        # Tracer 的 trace_id 是进程级的，切不出"这一轮"，所以另起一个
+        run_id = uuid.uuid4().hex[:8]
+        if self.tracer is not None:
+            # 注入给本轮所有 span（llm.turn / tool.call / tools.batch 都会带上），
+            # 事后就能按 会话 或 会话+轮次 聚合 token
+            self.tracer.set_context(session=session_id, run=run_id)
+
         # 系统提示每轮重建：技能目录和工具清单都来自当前装配状态
         system = build_system_prompt(self.settings, self.registry, self.skills)
 
@@ -85,7 +94,11 @@ class AgentLoop:
 
         yield AgentEvent(
             kind="started",
-            data={"session_id": session_id, "max_steps": self.settings.max_steps},
+            data={
+                "session_id": session_id,
+                "run_id": run_id,
+                "max_steps": self.settings.max_steps,
+            },
         )
 
         for step in range(self.settings.max_steps):
@@ -205,11 +218,13 @@ class AgentLoop:
         """跑一次模型调用：过程中抛增量事件，终值写进 holder。"""
         tools = self.registry.specs()
 
-        with self._span("llm.turn", step=step, stream=stream, tools=len(tools)):
+        # span 要绑出来：token 得写进这一次调用自己的属性里
+        with self._span("llm.turn", step=step, stream=stream, tools=len(tools)) as span:
             if not stream:
                 response = await self.llm.chat(messages, tools=tools)
                 holder["message"] = response.message
                 holder["usage"] = response.usage
+                note_tokens(span, response.usage)
                 # 非流式也抛成同样的增量事件：调用方的渲染逻辑只需要写一套
                 if response.message.reasoning:
                     yield AgentEvent(kind="reasoning", step=step, text=response.message.reasoning)
@@ -225,6 +240,7 @@ class AgentLoop:
                 elif chunk.kind == "done":
                     holder["message"] = chunk.message
                     holder["usage"] = chunk.usage
+                    note_tokens(span, chunk.usage)
 
     async def _call_tool(self, call: ToolCall,  *, session_id: str, step: int) -> str:
         """执行单个工具调用。
@@ -252,9 +268,15 @@ class AgentLoop:
             return await self.registry.call(call.name, call.arguments)
     # ------------------------------------------------------------------ 辅助
     def _span(self, name: str, **attributes: Any) -> AbstractContextManager[Any]:
-        """没有配置 tracer 时退化成空上下文，调用处不用写 if。"""
+        """没有配置 tracer 时退化成空上下文，调用处不用写 if。
+
+        注意这里**照样产出一个 `TraceSpan`**（只是没人会写它）：契约是
+        "`with ... as span` 拿到的永远是个 span 对象"。如果这里直接给
+        `nullcontext()`，绑出来的就是 `None`，调用点写 `span.attributes[...]`
+        会在没配 tracer 时炸掉——测试里就是这么炸出来的。
+        """
         if self.tracer is None:
-            return nullcontext()
+            return nullcontext(TraceSpan(name=name, attributes=attributes))
         return self.tracer.span(name, **attributes)
 
 
@@ -262,6 +284,29 @@ class AgentLoop:
     def stats(self) -> str:
         """给 CLI 收尾时打印的一行统计。"""
         return self.accountant.summary()
+
+
+def note_tokens(span: Any, usage: Usage | None) -> None:
+    """把这次模型调用的 token 记到它自己的 span 上。
+
+    为什么不只留在 `TokenAccountant` 里：那个是内存累加器，进程一退就归零，
+    只能回答"这一次问答花了多少"。而 span 会立刻被追加进 `.agent/traces.jsonl`，
+    于是"哪个会话、哪一轮、哪一步贵"变成可以事后聚合的事实。
+
+    这里只写 token（每次调用独有的数字）；session / run 这类公共上下文由
+    `Tracer.set_context()` 自动带上，不在这里重复。
+
+    什么时候不写：`usage` 为空（有些兼容端点在流式下不返回用量）。宁可缺一条，
+    也不要记 0——0 会被当成"这次不花钱"，而缺失是能被发现的。
+    """
+    if usage is None:
+        return
+    span.attributes.update(
+        {
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+        }
+    )
 
 
 def group_parallel_calls(
