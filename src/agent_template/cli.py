@@ -41,6 +41,13 @@ from agent_template.llm.base import LLMError
 from agent_template.memory.store import MemoryStore
 from agent_template.rag.indexer import build_index
 from agent_template.skills.loader import SkillsIndex
+from agent_template.agent.approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    approve_all,
+    ApprovalResult
+)
 
 # --------------------------------------------------------------- 输出编码
 # Windows 上把 stdout 重定向到文件时，Python 默认用**系统区域编码**
@@ -105,6 +112,7 @@ class Options:
     as_json: bool = False
     model: str | None = None
     provider: str | None = None
+    assume_yes: bool = False # --yes 跳过所有审批
 
     def build_settings(self) -> Settings:
         """把命令行参数叠加到配置上。
@@ -214,11 +222,51 @@ def print_mcp_notices(runtime: AgentRuntime) -> None:
         err.print(f"   原因：{failure.reason}")
         err.print(f"   排查：{failure.hint}")
 
+def make_approval_handler(options: Options) -> ApprovalHandler:
+    """构造一个"在终端里问人"的决策源。
 
+    三条分支，顺序有讲究：
+
+    1. `--yes` → 全部放行。给脚本和 CI 用，也是唯一一种"无人确认也执行"的路径。
+    2. **不是交互式终端** → 拒绝。管道、重定向、CI 里没有人能回答，
+       挂在那里等只会卡死；瞎猜批准更危险。所以默认拒绝，并把出路告诉用户。
+    3. 交互式 → 提问，默认值是 n（直接回车 = 拒绝）。
+    """
+    if options.assume_yes:
+        return approve_all
+    async def ask_in_terminal(request: ApprovalRequest) -> ApprovalResult:
+        call = request.call
+        arguments = json.dumps(call.arguments, ensure_ascii=False)
+
+        err.print()
+        err.print(
+            f"⚠ 需要确认：`{call.name}` 要做一次有副作用的操作", style="bold yellow"
+        )
+        err.print(f"   参数：{arguments}")
+
+        if not sys.stdin.isatty():
+            err.print(
+                "   当前不是交互式终端，无法确认 —— 已拒绝。"
+                "如需自动批准，请加 --yes",
+                style="yellow",
+            )
+            return ApprovalResult(ApprovalDecision.REJECTED, "非交互式环境，无法确认")
+
+        # 注意console=err：提示不能写进stdout
+        # 否则 `agent ask ... > answer.md` 得到的文件里会混进这段交互文字
+        answer = Prompt.ask("   执行吗？[y/N]", console=err, default="n").strip().lower()
+        if answer in {"y", "yes"}:
+            return ApprovalResult(ApprovalDecision.APPROVED)   # ← 早返回，feedback 就不会悬空
+        
+        # 只有拒绝才追问理由，回车可跳过
+        reason = Prompt.ask("   拒绝理由（可回车跳过）", console=err, default="")
+        return ApprovalResult(ApprovalDecision.REJECTED, reason.strip())
+    
+    return ask_in_terminal
 # ------------------------------------------------------------------- 对话流
 async def _ask(options: Options, question: str) -> int:
     """单次问答。返回退出码。"""
-    runtime = await AgentRuntime.create(options.build_settings())
+    runtime = await AgentRuntime.create(options.build_settings(), approve=make_approval_handler(options))
     try:
         print_mcp_notices(runtime)
         renderer = EventRenderer(options)
@@ -239,7 +287,7 @@ async def _ask(options: Options, question: str) -> int:
 
 async def _chat(options: Options) -> int:
     """交互式对话。返回退出码。"""
-    runtime = await AgentRuntime.create(options.build_settings())
+    runtime = await AgentRuntime.create(options.build_settings(), approve=make_approval_handler(options))
     try:
         print_mcp_notices(runtime)
         renderer = EventRenderer(options)
@@ -317,6 +365,9 @@ def main(
     as_json: bool = typer.Option(False, "--json", help="事件流以 JSONL 输出到 stdout"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_LLM_MODEL"),
     provider: str | None = typer.Option(None, "--provider", help="覆盖 AGENT_LLM_PROVIDER"),
+    assume_yes: bool = typer.Option(
+        False, "--yes", "-y", help="自动批准所有需要确认的操作（脚本、CI 用）"
+    ),  
     version: bool = typer.Option(False, "--version", help="打印版本后退出"),
 ) -> None:
     """不带子命令时直接进入交互式对话。"""
@@ -333,6 +384,7 @@ def main(
         as_json=as_json,
         model=model,
         provider=provider,
+        assume_yes=assume_yes,
     )
 
     # Typer/Click 的惯例：没有子命令时由 callback 决定做什么

@@ -31,6 +31,13 @@ from agent_template.memory.store import MemoryStore
 from agent_template.obs.tracing import TokenAccountant, Tracer
 from agent_template.skills.loader import SkillsIndex
 from agent_template.tools.registry import ToolRegistry
+from agent_template.agent.approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    approve_all,
+    rejected_message,
+)
 
 logger = logging.getLogger("agent.loop")
 
@@ -47,6 +54,7 @@ class AgentLoop:
         settings: Settings,
         skills: SkillsIndex | None = None,
         tracer: Tracer | None = None,
+        approve: ApprovalHandler | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -55,6 +63,9 @@ class AgentLoop:
         self.skills = skills
         self.tracer = tracer
         self.accountant = TokenAccountant()
+        # 没注入就用“全部批准”： 审批时显式开启的能力
+        # 默认关闭能保证现有代码路径一行都不变
+        self._approve: ApprovalHandler = approve or approve_all
 
     # ------------------------------------------------------------------ 入口
     async def run(
@@ -152,11 +163,13 @@ class AgentLoop:
 
                 # 执行。 批里只有一个就直连await(省掉并发调度的开销)
                 if len(batch) == 1:
-                    results = [await self._call_tool(batch[0])]
+                    results = [await self._call_tool(batch[0], session_id=session_id, step=step)]
                 else:
                     with self._span("tools.batch", count=len(batch)):
                         results = await asyncio.gather(
-                            *(self._call_tool(call) for call in batch)
+                            *(self._call_tool(call, session_id=session_id, step=step) 
+                              for call in batch
+                              ),
                         )
 
                 # 回填。gather 的返回值时**按传入顺序**排的(不是按完成顺序)
@@ -213,14 +226,29 @@ class AgentLoop:
                     holder["message"] = chunk.message
                     holder["usage"] = chunk.usage
 
-    async def _call_tool(self, call: ToolCall) -> str:
+    async def _call_tool(self, call: ToolCall,  *, session_id: str, step: int) -> str:
         """执行单个工具调用。
 
-        单独抽成方法，是为了能丢进 asyncio.gather 并发执行。
-        注意 registry.call **从不抛异常**（失败会变成「错误：...」文本），
-        所以并发时不需要额外的异常处理——这一点让 gather 特别安全。
+        有副作用的工具（`read_only=False`）必须先过审批：**决定权在人手里，
+        不在模型手里**。只读工具直接放行——否则每读一个文件都弹一次确认，
+        没人受得了。
+
+        注意 `registry.call` 从不抛异常（失败会变成「错误：...」文本），
+        所以并发时不需要额外的异常处理，这一点让 gather 特别安全。
         """
-        with self._span("tool_call", tool=call.name):
+
+        if not self.registry.is_parallel_safe(call.name):
+            result = await self._approve(
+                ApprovalRequest(call=call, session_id=session_id, step=step)
+            )
+            if not result.approved:
+                # 拒绝就**必定**返回：这里不能嵌在 `if result.reason:` 里面，
+                # 否则"没给理由"就会掉进下面的执行语句——拒绝变照做。
+                return rejected_message(call, result.reason)
+            
+        # span 名字保持 "tool.call"：obs 的文档和 tracing 的示例都用它，
+        # 改成别的名字会让按名字过滤 trace 的人漏掉这条
+        with self._span("tool.call", tool=call.name):
             return await self.registry.call(call.name, call.arguments)
     # ------------------------------------------------------------------ 辅助
     def _span(self, name: str, **attributes: Any) -> AbstractContextManager[Any]:

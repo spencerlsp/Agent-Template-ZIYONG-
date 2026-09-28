@@ -28,6 +28,7 @@ from agent_template.skills.loader import SkillsIndex
 from agent_template.skills.tools import register_skill_tools
 from agent_template.tools.builtin import register_builtin_tools
 from agent_template.tools.registry import ToolRegistry
+from agent_template.agent.approval import ApprovalHandler
 
 logger = logging.getLogger("agent.runtime")
 
@@ -46,6 +47,7 @@ class AgentRuntime:
         mcp: MCPManager | None = None,
         rag: RagPipeline | None = None,
         mcp_failures: list[MCPConnectResult] | None = None,
+        approve: ApprovalHandler | None = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
@@ -63,6 +65,7 @@ class AgentRuntime:
             settings=settings,
             skills=skills,
             tracer=tracer,
+            approve=approve,
         )
 
     # ------------------------------------------------------------------ 装配
@@ -73,6 +76,7 @@ class AgentRuntime:
         *,
         connect_mcp: bool = True,
         enable_rag: bool = True,
+        approve: ApprovalHandler | None = None,
     ) -> "AgentRuntime":
         """按配置装配一个完整的agent"""
         settings = settings or Settings()
@@ -126,6 +130,7 @@ class AgentRuntime:
             mcp=mcp,
             rag=rag,
             mcp_failures=mcp_failures,
+            approve=approve,
         )
         logger.info("工具表共 %d 个工具", len(runtime.registry))
         return runtime

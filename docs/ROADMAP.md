@@ -42,7 +42,7 @@
 | 增量索引 | [rag](../src/agent_template/rag/README.md) | 文档上百份、重建开始变慢时（现在只要 0.06 秒） | 一天 |
 | 多知识库 | [rag](../src/agent_template/rag/README.md) | 需要"不同项目各一套文档"时 | 半天 |
 | 可插拔向量库（Qdrant / pgvector） | [rag](../src/agent_template/rag/README.md) | 片段数上十万时 | 一天起 |
-| 工具审批与权限 | [tools](../src/agent_template/tools/README.md)、[agent](../src/agent_template/agent/README.md) | **一旦引入写操作就必须做**（写文件、执行命令） | 一天起 |
+| 静态工具白名单与审计 | [tools](../src/agent_template/tools/README.md) | 运行时审批（问人）已经做了；剩下的是**部署级授权**：启动时限制可用工具集、把每次调用记进审计日志 | 一天 |
 | MCP 工具名命名空间 | [mcp](../src/agent_template/mcp/README.md) | 挂第二个 MCP server 时必然遇到重名 | 两小时 |
 | MCP 的 HTTP 传输与健康检查 | [mcp](../src/agent_template/mcp/README.md) | 需要接远程/共享的 MCP 服务时 | 一天 |
 | HTTP + SSE 接口 | [agent](../src/agent_template/agent/README.md)、[cli](../cli.md) | 要接 Web 前端时。事件流已经是可序列化的，只需加一层 | 一天 |

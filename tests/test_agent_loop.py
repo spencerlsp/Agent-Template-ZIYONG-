@@ -18,6 +18,12 @@ from agent_template.llm.base import Message, ToolCall
 from agent_template.llm.mock import MockLLM
 from agent_template.memory.store import MemoryStore
 from agent_template.tools.registry import ToolRegistry
+from agent_template.agent.approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    ApprovalResult,
+)
 
 
 def build_loop(
@@ -147,8 +153,8 @@ async def test_runtime_assembles_offline(tmp_path: Path) -> None:
         settings, connect_mcp=False, enable_rag=False
     )
     try:
-        # 4 个内置工具 + load_skill / list_skills
-        assert len(runtime.registry) == 6
+        # 5 个内置工具（时间、计算、读、列目录、写）+ load_skill / list_skills
+        assert len(runtime.registry) == 7
 
         kinds = [event.kind async for event in runtime.ask("你好")]
 
@@ -261,6 +267,7 @@ def build_loop_with(
     scripted: list[Message],
     *,
     max_steps: int = 4,
+    approve: ApprovalHandler | None = None,
 ) -> tuple[AgentLoop, MemoryStore]:
     """用给定的工具表造一个循环，用于并发相关的测试。"""
     memory = MemoryStore(tmp_path / "memory.sqlite3")
@@ -272,6 +279,7 @@ def build_loop_with(
         registry=registry,
         memory=memory,
         settings=settings,
+        approve=approve,
     )
     return loop, memory
 
@@ -398,3 +406,180 @@ async def test_batch_events_come_before_their_results(tmp_path: Path) -> None:
         "tool_result",
         "tool_result",
     ]
+
+# --------------------------------------------- 工具审批（Human in the loop）
+
+
+def build_approval_case(
+    tmp_path: Path,
+    approve: ApprovalHandler,
+    *,
+    read_only: bool = False,
+) -> tuple[AgentLoop, MemoryStore, list[str]]:
+    """造一个"一个工具 + 一个决策源"的循环，返回 (loop, memory, 执行日志)。"""
+    executed: list[str] = []
+    registry = ToolRegistry()
+
+    @registry.register(read_only=read_only)
+    def demo_tool(path: str) -> str:
+        """演示工具：记录自己被真正执行过。"""
+        executed.append(path)
+        return f"已处理 {path}"
+
+    loop, memory = build_loop_with(
+        tmp_path,
+        registry,
+        [
+            Message.assistant(
+                tool_calls=[
+                    ToolCall(id="c0", name="demo_tool", arguments={"path": "a.txt"})
+                ]
+            ),
+            Message.assistant("完成"),
+        ],
+        approve=approve,
+    )
+    return loop, memory, executed
+
+
+async def test_approved_tool_actually_runs(tmp_path: Path) -> None:
+    """批准之后工具必须真的执行——审批不能只是走个形式。"""
+    asked: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalResult:
+        asked.append(request)
+        return ApprovalResult(ApprovalDecision.APPROVED)
+
+    loop, memory, executed = build_approval_case(tmp_path, approve)
+
+    try:
+        await collect(loop)
+    finally:
+        memory.close()
+
+    assert [item.call.name for item in asked] == ["demo_tool"]  # 确实问了
+    assert asked[0].session_id == "s1"                          # 信息完整
+    assert executed == ["a.txt"]                                # 确实执行了
+
+
+async def test_rejected_tool_never_executes(tmp_path: Path) -> None:
+    """拒绝之后副作用绝对不能发生。
+
+    只断言"回复给模型的文案"是不够的——必须证明**工具没被执行**，
+    否则就是"嘴上拒绝、身体执行"。
+    """
+    async def reject(request: ApprovalRequest) -> ApprovalResult:
+        return ApprovalResult(ApprovalDecision.REJECTED, reason="这份笔记还在用")
+
+    loop, memory, executed = build_approval_case(tmp_path, reject)
+
+    try:
+        await collect(loop)
+        history = memory.history("s1")
+    finally:
+        memory.close()
+
+    assert executed == []                       # ← 关键断言：副作用没发生
+
+    tool_text = next(m.content or "" for m in history if m.role == "tool")
+    assert "人工拒绝" in tool_text               # 说清性质
+    assert "不要重试" in tool_text               # 禁止重试
+    assert "不要换别的方式" in tool_text         # 堵住绕道
+    assert "这份笔记还在用" in tool_text         # 用户给的理由要带给模型
+
+
+async def test_read_only_tool_skips_approval(tmp_path: Path) -> None:
+    """只读工具不该弹审批——否则读个文件都要确认，没人受得了。"""
+    asked: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalResult:
+        asked.append(request)
+        return ApprovalResult(ApprovalDecision.APPROVED)
+
+    loop, memory, executed = build_approval_case(tmp_path, approve, read_only=True)
+
+    try:
+        await collect(loop)
+    finally:
+        memory.close()
+
+    assert asked == []                  # 一次都没问
+    assert executed == ["a.txt"]        # 但仍然正常执行了
+
+async def test_runtime_forwards_the_approval_handler(tmp_path: Path) -> None:
+    """走 AgentRuntime（而不是直接构造 AgentLoop）也必须能触发审批。
+
+    这条测试来自一次真实的疏漏：`create(approve=...)` 收下了参数，却忘记往
+    `cls(...)` 里传，结果是"以为开了审批，其实一次都没问"——而且完全静默，
+    没有任何报错。只测 AgentLoop 抓不到它，必须从 create() 整条链路走一遍。
+    """
+    asked: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalResult:
+        asked.append(request)
+        return ApprovalResult(ApprovalDecision.REJECTED, reason="接线测试")
+
+    settings = Settings(
+        llm_provider="mock",
+        project_root=tmp_path,
+        mcp_servers=[],
+        embedding_provider="local_hash",
+        embedding_dim=64,
+    )
+    runtime = await AgentRuntime.create(
+        settings, connect_mcp=False, enable_rag=False, approve=approve
+    )
+    try:
+        # 往运行时自己的工具表里塞一个"有副作用"的工具，
+        # 再换上一个会主动调用它的假模型
+        @runtime.registry.register
+        def write_thing(path: str) -> str:
+            """写点东西（有副作用）。"""
+            return f"写了 {path}"
+
+        runtime.loop.llm = MockLLM(
+            scripted=[
+                Message.assistant(
+                    tool_calls=[
+                        ToolCall(
+                            id="c0", name="write_thing", arguments={"path": "a.txt"}
+                        )
+                    ]
+                ),
+                Message.assistant("完成"),
+            ]
+        )
+
+        async for _ in runtime.ask("随便问一句", session_id="approval-wiring"):
+            pass
+    finally:
+        await runtime.aclose()
+
+    assert asked, "审批一次都没触发——说明 create(approve=...) 没把参数传到循环里"
+
+
+async def test_rejection_without_reason_still_blocks_execution(tmp_path: Path) -> None:
+    """没有理由的拒绝，也**必须**阻止执行。
+
+    这是安全底线的回归守卫。曾经写成：
+
+        if not result.approved:
+            if result.reason:              # ← 条件错了
+                return rejected_message(...)
+        # 没理由就掉到这里 → 工具照样执行
+
+    而"回车跳过理由"恰恰是最常见的拒绝路径，所以这个 bug 会让审批在最常用的
+    场景下完全失效：嘴上拒绝、身体执行。
+    """
+
+    async def reject_without_reason(request: ApprovalRequest) -> ApprovalResult:
+        return ApprovalResult(ApprovalDecision.REJECTED)   # 不给理由
+
+    loop, memory, executed = build_approval_case(tmp_path, reject_without_reason)
+
+    try:
+        await collect(loop)
+    finally:
+        memory.close()
+
+    assert executed == [], "没给理由的拒绝被执行了——安全底线失守"

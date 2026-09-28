@@ -52,3 +52,27 @@ def make_list_dir(settings: Settings):
         lines = [f"{item.name}/" if item.is_dir() else item.name for item in entries]
         return "\n".join(lines) or "{empty directory}"
     return list_dir
+
+
+def make_write_file(settings: Settings):
+    """写入文件的工具工厂。
+
+    它是模板里**唯一有副作用的工具**，也正是审批机制的触发点：注册时故意
+    不声明 `read_only`，默认值就是"有副作用"，于是每次调用都会先停下来问人
+    （见 agent/approval.py）。
+
+    安全上有两层独立防护，各管一件事，缺一层都留着洞：
+        * `_inside()` 保证路径不逃出工作区 —— 工具自己做的
+        * 人工审批保证"要不要写"由人决定 —— 循环做的
+    """
+    root = settings.resolve(settings.workspace_root)
+
+    def write_file(path: str, content: str) -> str:
+        """把内容写入工作区里的文本文件（会覆盖原文件）。这是有副作用的操作，执行前需要人工确认。"""
+        target = _inside(root, path)
+        # 父目录可能还不存在（比如要写 logs/today.md）
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"已写入 {path}（{len(content)} 字）"
+
+    return write_file
