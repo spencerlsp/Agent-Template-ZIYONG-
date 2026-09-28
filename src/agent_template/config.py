@@ -76,6 +76,21 @@ class Settings(BaseSettings):
     rag_candidates: int = 20
 
 
+
+    # --- 重排（rerank）-----------------------------------------------------
+    # 默认关闭：开启后，融合出的候选先过一遍重排模型，再取 rag_top_k 条给模型。
+    # 默认值选 "none" 是为了让接进检索层时，行为与之前完全一致。
+    rerank_provider: Literal["none", "openai_compat"] = "none"
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_base_url: str = "https://api.siliconflow.cn/v1"
+    rerank_api_key: SecretStr | None = None
+    # 送去重排的候选条数（重排后再取 rag_top_k 条）。比 rag_candidates 小，
+    # 因为重排是逐条打分的，候选越多越慢越贵。
+    rerank_candidates: int = 20
+
+
+    
+
     # --- Paths (relative values resolve against the project root) ----------
     project_root: Path = PROJECT_ROOT
     skills_dir: Path = Path("skills")
