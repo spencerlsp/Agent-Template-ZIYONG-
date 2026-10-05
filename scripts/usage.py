@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 # ---------------------------------------------------------------- 标准库
-# argparse：几个选项不值得引入 typer（CLI 才用它）。和 evals/ 里的脚本保持一致。
+# argparse：几个选项不值得引入 typer（CLI 才用它），脚本保持零额外依赖。
 import argparse
 # defaultdict：聚合时的累加器，省得写 if key not in ...
 from collections import defaultdict

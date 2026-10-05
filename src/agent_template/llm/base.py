@@ -1,6 +1,6 @@
 """provider-neutral conversation primitives
 
-Everything above this module - tools, skills, MCP, RAG, the agent loop - speaks
+Everything above this module - tools, skills, MCP, the agent loop - speaks
 only these types. Adding a new model provider means adding one adapter file,
 not touching the agent.
 """

@@ -1,13 +1,16 @@
-"""运行时装配：把模型、工具、技能、MCP、RAG、记忆、追踪拼成一个能用的 agent。
+"""运行时装配：把模型、工具、技能、MCP、记忆、追踪拼成一个能用的 agent。
 
 为什么单独有这一层：
     "怎么组装"和"怎么循环"是两件事。装配要管资源生命周期（MCP 子进程、
     SQLite 连接、HTTP 客户端），循环只管消息流转。分开之后，测试可以只装
-    一个假模型和空工具表来跑循环，不必启动 MCP 或 RAG。
+    一个假模型和空工具表来跑循环，不必启动 MCP。
 
-一个重要的设计取舍：**RAG 没有索引时不能让 agent 起不来**。
-首次 clone 下来的用户还没建索引，这时应该照常能对话，只是没有检索能力，
-并在日志里说清楚原因。同理，某个 MCP 服务器起不来只跳过它，不影响其他部分。
+一个重要的设计取舍：**外部能力不可用时不能让 agent 起不来**。
+某个 MCP 服务器（比如提供知识库检索的那个）起不来，只跳过它、记一条失败记录，
+对话照常进行。首次 clone 下来的用户什么都还没配，也应该能立刻跑起来。
+
+**这里不再有 RAG 了。** 检索能力现在是一个外部服务（ragkit），通过 MCP 接进来——
+它和任何别的 MCP 服务器走同一条路：连接、发现工具、并入工具表。
 """
 
 from __future__ import annotations
@@ -22,8 +25,6 @@ from agent_template.mcp.bridge import register_mcp_tools
 from agent_template.mcp.client import MCPManager, MCPConnectResult
 from agent_template.memory.store import MemoryStore
 from agent_template.obs.tracing import Tracer
-from agent_template.rag.pipeline import RagNotReady, RagPipeline
-from agent_template.rag.tools import register_rag_tools
 from agent_template.skills.loader import SkillsIndex
 from agent_template.skills.tools import register_skill_tools
 from agent_template.tools.builtin import register_builtin_tools
@@ -45,7 +46,6 @@ class AgentRuntime:
         skills: SkillsIndex,
         tracer: Tracer,
         mcp: MCPManager | None = None,
-        rag: RagPipeline | None = None,
         mcp_failures: list[MCPConnectResult] | None = None,
         approve: ApprovalHandler | None = None,
     ) -> None:
@@ -56,7 +56,6 @@ class AgentRuntime:
         self.skills = skills
         self.tracer = tracer
         self.mcp = mcp
-        self.rag = rag
         self.mcp_failures: list[MCPConnectResult] = mcp_failures or []
         self.loop = AgentLoop(
             llm=llm,
@@ -75,7 +74,6 @@ class AgentRuntime:
         settings: Settings | None = None,
         *,
         connect_mcp: bool = True,
-        enable_rag: bool = True,
         approve: ApprovalHandler | None = None,
     ) -> "AgentRuntime":
         """按配置装配一个完整的agent"""
@@ -91,21 +89,9 @@ class AgentRuntime:
         register_skill_tools(registry, skills)
         logger.info("已加载 %d 个技能：%s", len(skills), skills.names())
 
-        # ---- RAG: 没建索引时降级 , 不阻断启动 ----
-        rag: RagPipeline | None = None
-        if enable_rag:
-            candidate = RagPipeline(settings)
-            try:
-                candidate.ensure_ready()
-            except RagNotReady as exc:
-                logger.warning("RAG 不可用，已跳过：%s", exc)
-                await candidate.aclose()
-            else:
-                rag = candidate
-                register_rag_tools(registry, rag)
-                logger.info("RAG 已就绪，索引 %d 个片段", rag.store.count())
-
         # ---- MCP：远端工具并入同一张表；连不上的要留下失败记录 ----
+        # 知识库检索也走这条路：ragkit 是一个 MCP 服务器，
+        # 它连不上时下面只记一条失败记录，对话照常。
         # mcp 必须先声明：下面那个 if 不成立时（没配 server，或调用方显式
         # connect_mcp=False），构造 runtime 时仍然会用到这个变量。
         mcp: MCPManager | None = None
@@ -128,7 +114,6 @@ class AgentRuntime:
             skills=skills,
             tracer=Tracer(settings.trace_path),
             mcp=mcp,
-            rag=rag,
             mcp_failures=mcp_failures,
             approve=approve,
         )
@@ -153,7 +138,5 @@ class AgentRuntime:
         """释放所有资源。顺序反过来：先关有子进程的，再关连接。"""
         if self.mcp is not None:
             await self.mcp.aclose()
-        if self.rag is not None:
-            await self.rag.aclose()
         await self.llm.aclose()
         self.memory.close()

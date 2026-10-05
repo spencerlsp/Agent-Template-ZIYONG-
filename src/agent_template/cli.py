@@ -48,7 +48,6 @@ from agent_template.agent.runtime import AgentRuntime
 from agent_template.config import Settings
 from agent_template.llm.base import LLMError
 from agent_template.memory.store import MemoryStore
-from agent_template.rag.indexer import build_index
 from agent_template.skills.loader import SkillsIndex
 from agent_template.agent.approval import (
     ApprovalDecision,
@@ -83,7 +82,7 @@ def setup_logging(verbose: bool) -> None:
     都被静默丢掉——而排查问题时最需要的恰恰是那些信息。
 
     默认只放行 WARNING 以上（保持安静）；--verbose 打开 INFO，正好把
-    "加载了几个技能""RAG 是否就绪""MCP 连上了谁"这类装配信息显示出来。
+    "加载了几个技能""MCP 连上了谁、带进来哪些工具"这类装配信息显示出来。
 
     日志一律走 stderr：它属于"过程"，不能污染 stdout 里的回答。
     """
@@ -136,7 +135,7 @@ app = typer.Typer(
     # 不加子命令时进入对话，而不是打印帮助——这是最常用的入口
     no_args_is_help=False,
     help=(
-        "本地开发 agent：对话、工具、技能、MCP、RAG 都在这里。\n\n"
+        "本地开发 agent：对话、工具、技能、MCP（含知识库检索）都在这里。\n\n"
         "全局选项（-s / -v / --json / --model / --provider / -y …）要写在子命令之前："
         "`agent -v tools`，不是 `agent tools -v`。这是 Click 的语义——子命令之后的选项"
         "属于那个子命令，摆错位置会直接报 `No such option`。"
@@ -265,6 +264,16 @@ def print_mcp_notices(runtime: AgentRuntime) -> None:
         err.print(f"   原因：{failure.reason}")
         err.print(f"   排查：{failure.hint}")
 
+
+def _mcp_tool_count(runtime: AgentRuntime) -> int:
+    """工具表里有几个来自 MCP 的工具。
+
+    替代了原来那句「RAG 已就绪 / 未启用」——检索现在也是一台 MCP 服务器
+    （ragkit），它到底有没有接上，看这个数字比看一句写死的话可靠。
+    """
+    return sum(1 for tool in runtime.registry.entries() if tool.source.startswith("mcp:"))
+
+
 def make_approval_handler(options: Options) -> ApprovalHandler:
     """构造一个"在终端里问人"的决策源。
 
@@ -338,7 +347,7 @@ async def _chat(options: Options) -> int:
             Panel.fit(
                 f"会话 [bold]{options.session}[/bold]"
                 f"｜{len(runtime.registry)} 个工具"
-                f"｜RAG {'已就绪' if runtime.rag else '未启用'}\n"
+                f"｜MCP 工具 {_mcp_tool_count(runtime)} 个\n"
                 "输入 /exit 退出，/help 查看全部命令",
                 border_style="dim",
             )
@@ -496,34 +505,6 @@ def skills(ctx: typer.Context) -> None:
             continue
         table.add_row(name, skill.description, str(skill.path))
     out.print(table)
-
-
-@app.command()
-def index(ctx: typer.Context) -> None:
-    """重建知识库索引（整库重建，随时可以重跑）。"""
-    settings = _options(ctx).build_settings()
-
-    try:
-        report = _run(build_index(settings))
-    except FileNotFoundError as exc:
-        err.print(f"！{exc}", style="bold red")
-        raise typer.Exit(1) from None
-    except LLMError as exc:
-        err.print(f"！embedding 调用失败：{exc}", style="bold red")
-        raise typer.Exit(1) from None
-
-    table = Table.grid(padding=(0, 2))
-    table.add_row("文档数", str(report.documents))
-    table.add_row("片段数", str(report.chunks))
-    table.add_row("向量维度", str(report.dim))
-    table.add_row("embedder", report.embedder)
-    table.add_row("索引文件", str(report.index_path))
-    table.add_row("耗时", f"{report.elapsed_s}s")
-    out.print(table)
-
-    err.print(f"· 每份文档的片段数：{report.per_source}")
-    err.print("· 首个片段样例（用于检查切块质量）：")
-    err.print("  " + report.sample[:160].replace("\n", "\n  "))
 
 
 @app.command()

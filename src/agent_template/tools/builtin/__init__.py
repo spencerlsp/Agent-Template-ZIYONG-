@@ -13,7 +13,7 @@ from agent_template.tools.registry import ToolRegistry
 
 
 def register_builtin_tools(registry: ToolRegistry, settings: Settings) -> ToolRegistry:
-    """Attach the standard tool set. RAG and MCP add theirs later."""
+    """Attach the standard tool set. MCP adds its own later."""
     registry.register(get_current_time, read_only=True)
     registry.register(calculator, read_only=True)
     registry.register(make_read_file(settings), read_only=True)

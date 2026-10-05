@@ -1,11 +1,11 @@
 """Offline, deterministic model.
 
 It is deliberately not smart: it exists so the whole pipeline - agent loop,
-tools, skills, MCP, RAG - can run in CI and be demoed with no network and no
+tools, skills, MCP - can run in CI and be demoed with no network and no
 API key.
 """
 # 离线确定性模型。
-# 它刻意不具备智能能力：设计它的目的，是让整套流水线（智能体循环、工具、技能、MCP、RAG）
+# 它刻意不具备智能能力：设计它的目的，是让整套流水线（智能体循环、工具、技能、MCP）
 # 能够在 CI 环境中运行，并且无需网络、无需 API 密钥即可演示
 
 

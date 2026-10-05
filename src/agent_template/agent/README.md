@@ -1,11 +1,11 @@
 # agent —— 主循环与运行时装配
 
-> 把模型、工具、技能、MCP、RAG、记忆串起来的地方。
+> 把模型、工具、技能、MCP、记忆串起来的地方。
 > 两层分工：**`AgentRuntime` 负责组装与资源生命周期，`AgentLoop` 负责消息流转。**
 
 ## 负责什么
 
-- **装配**（`runtime.py`）：按配置构建模型客户端、工具表、技能索引、RAG、MCP、
+- **装配**（`runtime.py`）：按配置构建模型客户端、工具表、技能索引、MCP、
   记忆、追踪器，并管理它们的关闭顺序。
 - **编排**（`loop.py`）：读历史 → 拼提示 → 调模型 → 执行工具 → 回填结果 → 循环，
   直到模型给出最终答案或到达步数上限。
@@ -18,7 +18,7 @@
 | --- | --- |
 | 打印、着色、流式渲染 | `cli.py`（循环只抛事件） |
 | 工具的实现与校验 | `tools/` |
-| 检索细节 | `rag/`（对循环而言它只是又一个工具） |
+| 检索细节 | 外部 MCP 服务（对循环而言它只是又一个工具） |
 | 历史怎么裁剪 | `memory/` |
 
 ## 成员清单
@@ -66,7 +66,7 @@
 | `AgentRuntime.create()` | async 工厂：完成全部装配，返回可用实例 |
 | `AgentRuntime.ask()` | 委托给 `AgentLoop.run()`，返回事件流 |
 | `AgentRuntime.describe_tools()` | 工具清单，CLI 的 `agent tools` 用它 |
-| `AgentRuntime.aclose()` | 按依赖顺序关闭：MCP → RAG → 模型 → 记忆 |
+| `AgentRuntime.aclose()` | 按依赖顺序关闭：MCP → 模型 → 记忆 |
 
 ## 类之间的关系
 
@@ -78,7 +78,7 @@
      LLMClient    ToolRegistry     MemoryStore      Tracer
                      ▲ ▲ ▲
         ┌────────────┘ │ └────────────┐
-     builtin       rag.tools      mcp.bridge
+     builtin       skill.tools    mcp.bridge
         └───── skills.tools ─────────┘
                         │
                         ▼
@@ -114,11 +114,11 @@ SSE，测试要断言事件序列。回调能解决一部分问题，但调用�
 拆开之后，测试可以只用 `MockLLM` + 空工具表构造一个 `AgentLoop`，
 **不必启动 MCP、不必有索引**就能跑完整的循环逻辑。
 
-**3. 为什么 RAG 没索引、MCP 连不上都要降级而不是报错。**
+**3. 为什么 MCP 连不上要降级而不是报错。**
 首次 `git clone` 的用户还没建索引；某个 MCP server 可能没装。这些都不该让
 "对话"这个基本能力失效。所以：
 
-- RAG 不可用 → 记 warning，跳过，其余照常
+- MCP server 不可用（含知识库服务）→ 记 warning，跳过它的工具，其余照常
 - 某个 MCP server 起不来 → 跳过它，其他 server 照常
 - 只有模型客户端不可用才算致命（那是核心依赖）
 

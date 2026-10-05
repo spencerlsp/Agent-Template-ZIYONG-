@@ -1,7 +1,7 @@
 # tools —— 工具层（函数调用）
 
 > 把"普通 Python 函数"变成"模型可以调用的能力"的唯一入口。
-> 本地工具、技能工具、RAG 检索、MCP 远端工具，最终都注册到同一张表里。
+> 本地工具、技能工具、MCP 远端工具（知识库检索也是其中之一），最终都注册到同一张表里。
 
 ## 负责什么
 
@@ -16,7 +16,7 @@
 | --- | --- |
 | 决定要不要调工具 | 模型自己决定，`agent/loop.py` 负责执行 |
 | 循环调用直到收敛 | `agent/loop.py` |
-| 工具的业务实现 | 各 `builtin/` 与 `rag/tools.py`、`mcp/bridge.py` |
+| 工具的业务实现 | 各 `builtin/` 与 `mcp/bridge.py` |
 | 沙箱与权限 | 由工具自己实现（例如 `fs.py` 的 `_inside()`） |
 
 ## 成员清单
@@ -131,7 +131,7 @@ registry.register(make_search_web(settings))
 
 ### 形态三：异步函数
 
-直接用 `async def` 写即可，`call()` 会识别并 await。RAG 的
+直接用 `async def` 写即可，`call()` 会识别并 await。MCP 的
 `search_knowledge_base` 就是这种形态（它要调用 async 的检索）。
 
 ### 形态四：schema 已经现成（MCP）
