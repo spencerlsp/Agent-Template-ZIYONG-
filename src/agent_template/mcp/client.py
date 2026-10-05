@@ -35,6 +35,15 @@ class MCPTool:
     name: str
     description: str
     parameters: dict[str, Any]
+    # 服务端声明的"只读"提示（MCP 的 annotations.readOnlyHint）。
+    #
+    # 为什么要带这个字段：远端工具在我们的工具表里默认是"有副作用"（read_only=False），
+    # 而 read_only 同时决定两件事——能不能并发、要不要人工审批。一个纯读的检索工具
+    # 如果被当成有副作用，交互式下每问一句都要确认，非交互（脚本、CI）里会被直接拒绝。
+    #
+    # 默认 False 是刻意的：服务端没声明就别假设它安全——MCP 规范也明确说过，
+    # 不要拿不可信服务端的 annotations 做安全决策。这里只为你自己配置的 server 服务。
+    read_only: bool = False
 
 @dataclass(slots=True)
 class MCPConnectResult:
@@ -157,6 +166,12 @@ class MCPClient:
                 # 2.x 的字段名是 input_schema（1.x 是 inputSchema）
                 parameters=tool.input_schema
                 or {"type": "object", "properties": {}},
+                # annotations 可能是 None（老 server 不声明），也可能是
+                # read_only_hint=None（声明了但没给这一项）——两种都当"没声明"
+                read_only=bool(
+                    tool.annotations is not None
+                    and tool.annotations.read_only_hint is True
+                ),
             )
             for tool in result.tools
         ]
