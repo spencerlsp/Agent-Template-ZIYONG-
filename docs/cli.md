@@ -10,7 +10,6 @@ agent chat                同上，显式写法
 agent ask "问题"          单次问答后退出
 agent tools               列出全部工具（含 MCP 远端工具与来源）
 agent skills              列出技能目录
-agent index               重建知识库索引
 agent sessions            查看会话列表
 agent sessions --clear X  清空会话 X 的历史
 ```
@@ -108,7 +107,7 @@ CLI 启动时会把 stdout/stderr 强制设为 UTF-8，不跟随系统区域设�
 | 退出码 | 含义 |
 | --- | --- |
 | 0 | 成功 |
-| 1 | 运行错误（模型调用失败、知识库为空等） |
+| 1 | 运行错误（模型调用失败等） |
 | 2 | 用法错误（Typer/Click 处理） |
 | 130 | 被用户中断（Ctrl+C） |
 
@@ -153,8 +152,8 @@ stdout 每行一个 JSON，对应一个 `AgentEvent`。字段定义见
 
 | 级别 | 何时出现 |
 | --- | --- |
-| WARNING（默认） | RAG 不可用、MCP server 连接失败等需要注意但可降级的情况 |
-| INFO（`-v`） | 装配结果：加载了几个技能、RAG 索引了多少片段、连上了哪些 MCP server、工具表总数 |
+| WARNING（默认） | MCP server 连接失败等需要注意但可降级的情况 |
+| INFO（`-v`） | 装配结果：加载了几个技能、连上了哪些 MCP server、各带回几个工具、工具表总数 |
 | DEBUG | 目前只有 span 记录；`obs/tracing.py` 里的 `logger.debug` |
 
 日志通过 `setup_logging()` 接到 stderr。**必须显式配置**——Python 的 root logger
@@ -162,8 +161,8 @@ stdout 每行一个 JSON，对应一个 `AgentEvent`。字段定义见
 
 ## 退出时的资源清理
 
-每条路径都包在 `try/finally` 里调用 `runtime.aclose()`：MCP 子进程、RAG 的
-SQLite 连接、模型的 HTTP 客户端都会被释放。**Ctrl+C 中断也会走到这里**——
+每条路径都包在 `try/finally` 里调用 `runtime.aclose()`：MCP 子进程、
+会话记忆的 SQLite 连接、模型的 HTTP 客户端都会被释放。**Ctrl+C 中断也会走到这里**——
 否则会残留 python 子进程占着管道。
 
 用 `tasklist | grep -i python`（Windows）或 `ps aux | grep agent_template` 可以确认。
