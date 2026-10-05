@@ -1,91 +1,46 @@
 # 路线图
 
-这份清单汇总自各模块 README 末尾的"后续可做"，按**投入产出比**重新排过序。
-每一项都标了出处，细节可以点回去看。
+按"投入产出比"分三波。每条都标了出处，细节点回去看模块自己的 README。
 
-分四波推进：**第一波零成本高收益，第二波提升质量，第三波需要设计，第四波是范式扩展。**
+## 第一波：补小洞（每条半天以内）
 
----
+| 事项 | 出处 | 为什么 |
+| --- | --- | --- |
+| 上下文压缩（对话摘要） | [agent](../src/agent_template/agent/README.md)、[memory](../src/agent_template/memory/README.md) | 长对话的主要瓶颈：不压缩就只能砍历史，砍了就前言不搭后语 |
+| 工具级统计 | [tools](../src/agent_template/tools/README.md) | 工具一多，"哪个工具模型老用错"是最该看的数据 |
+| 按会话算成本 | [obs](../src/agent_template/obs/README.md)、[llm](../src/agent_template/llm/README.md) | token 已经能按会话/轮次聚合（`scripts/usage.py`），缺的是"换算成钱"——但各家单价不同且一直在变，建议只做**可选**单价，别当默认 |
+| 结构化输出（`response_format`） | [llm](../src/agent_template/llm/README.md) | `chat()` 已预留参数没人用，适合"必须返回 JSON"的抽取/分类 |
+| 慢 span 告警 | [obs](../src/agent_template/obs/README.md) | 某次工具调用或模型轮次超阈值时当场提示，比事后翻 `traces.jsonl` 管用 |
 
-## 第一波：零成本高收益
+## 第二波：工程质量（需要设计决策）
 
-都在半天以内，几乎不需要新设计，做完立刻见效。
+| 事项 | 出处 | 触发条件 |
+| --- | --- | --- |
+| 技能触发测试 | [skills](../src/agent_template/skills/README.md) | 技能的失败方式是"模型压根没读它"，静默且难察觉。准备一批"该触发 / 不该触发"的用例，改 `description` 时才有反馈 |
+| HTTP + SSE 接口 | [agent](../src/agent_template/agent/README.md)、[cli](cli.md) | 要接 Web 前端时。事件流已经可序列化，只需加一层 |
+| MCP 工具命名空间 | [mcp](../src/agent_template/mcp/README.md) | 挂第二个 MCP server 时必然遇到重名 |
+| 静态工具白名单与审计 | [tools](../src/agent_template/tools/README.md) | 运行时审批（问人）已经有了；剩下的是**部署级授权**：启动时限制可用工具集、把每次调用记进审计日志 |
 
-| 事项 | 出处 | 为什么现在做 | 工作量 |
-| --- | --- | --- | --- |
-| 慢 span 告警 | [obs](../src/agent_template/obs/README.md) | 某个工具或某轮模型调用超过阈值时当场提示，比事后翻 `traces.jsonl` 管用 | 两小时 |
+> **检索与评测不在这份清单里**——它们在独立的 ragkit 项目里做（解析、切分、向量化、
+> Milvus、混合检索、重排、评估）。本项目只通过 MCP 消费它的工具，
+> 所以 RAG 那些优化（增量索引、多知识库、可插拔向量库、查询改写、语义切块）
+> 都不会影响这个模板。
 
-> 同一批的另外三件已经完成：`obs` 的 logger 名拼写、`llm` 的 `api_key` 类型兜底
-> （把"毫无头绪的 401"变成启动即报错）、CLI 里说明"全局选项要写在子命令之前"。
-> 最后这条不止写进了 `--help`——`agent tools -v` 这种摆错位置的情况，会在报错的地方
-> 直接看到提示，不用回头翻文档。
+## 第三波：范式扩展
 
-## 第二波：提升答案质量
-
-这一天到两天的投入会直接反映在回答质量上，建议按顺序做。
-
-| 事项 | 出处 | 为什么 | 工作量 |
-| --- | --- | --- | --- |
-| **给 rerank 定候选数** | [rag](../src/agent_template/rag/README.md)、[evals](../evals/README.md) | 重排已经接上（MRR 0.792 → 0.936），但 `AGENT_RERANK_CANDIDATES=20` 是从 `rag_candidates` 抄来的、没验过。降到 10 / 5 各跑一遍评测和延迟基准，找"MRR 开始掉"的拐点 | 两小时 |
-| **加难评测集** | [evals](../evals/README.md) | 当前 60 条用例 Recall 已经 1.000，**指标饱和的评测集比没有评测集更危险**——它会给你"已经很好"的错觉。补跨文档多跳、口语化改写、带指代的追问 | 半天 |
-| **小块检索、大块生成** | [rag](../src/agent_template/rag/README.md) | 检索用小片段保精度，命中后把所属完整章节给模型保上下文。需要给片段记"父块 id" | 一天 |
-| 技能触发测试 | [skills](../src/agent_template/skills/README.md) | 技能的失败方式是"模型压根没读它"，静默且难察觉。准备一批"该触发 / 不该触发"的用例，改 `description` 时才有反馈 | 半天 |
-| **上下文压缩（对话摘要）** | [agent](../src/agent_template/agent/README.md)、[memory](../src/agent_template/memory/README.md) | 长对话的主要瓶颈：不压缩就只能砍历史，砍了就前言不搭后语 | 一天 |
-| 工具级统计 | [tools](../src/agent_template/tools/README.md) | 工具一多，"哪个工具模型老用错"是最该看的数据 | 半天 |
-| 成本计量：配单价表 | [llm](../src/agent_template/llm/README.md)、[obs](../src/agent_template/obs/README.md) | token 数字有了，但换算成钱才有决策价值 | 半天 |
-| 结构化输出（`response_format`） | [llm](../src/agent_template/llm/README.md) | `chat()` 已预留参数没人用，适合"必须返回 JSON"的抽取/分类场景 | 半天 |
-
-> 这一波里的**换真实 embedding** 已经完成：本项目 `.env` 用的是 `BAAI/bge-m3`
-> （索引 `meta` 里记的 embedder 就是 `openai_compat:BAAI/bge-m3`，1024 维），
-> [evals/README.md](../evals/README.md) 里的基线数字也都是在它下面测的。
-> 但**模板默认值仍然是 `local_hash`**，这是刻意的——不配 key、不联网也能把整条链路
-> 跑起来；要换真实模型，做法见主 README 的"换成真实 embedding"一节。
-
-## 第三波：工程化
-
-需要设计决策，建议在真实需求出现后再做。
-
-| 事项 | 出处 | 触发条件 | 工作量 |
-| --- | --- | --- | --- |
-| 增量索引 | [rag](../src/agent_template/rag/README.md) | 文档上百份、重建开始变慢时（现在只要 0.06 秒） | 一天 |
-| 多知识库 | [rag](../src/agent_template/rag/README.md) | 需要"不同项目各一套文档"时 | 半天 |
-| 可插拔向量库（Qdrant / pgvector） | [rag](../src/agent_template/rag/README.md) | 片段数上十万时 | 一天起 |
-| 静态工具白名单与审计 | [tools](../src/agent_template/tools/README.md) | 运行时审批（问人）已经做了；剩下的是**部署级授权**：启动时限制可用工具集、把每次调用记进审计日志 | 一天 |
-| MCP 工具名命名空间 | [mcp](../src/agent_template/mcp/README.md) | 挂第二个 MCP server 时必然遇到重名 | 两小时 |
-| MCP 的 HTTP 传输与健康检查 | [mcp](../src/agent_template/mcp/README.md) | 需要接远程/共享的 MCP 服务时 | 一天 |
-| HTTP + SSE 接口 | [agent](../src/agent_template/agent/README.md)、[cli](../cli.md) | 要接 Web 前端时。事件流已经是可序列化的，只需加一层 | 一天 |
-| 查询改写（多路检索式） | [rag](../src/agent_template/rag/README.md) | 用户提问口语化、指代多时 | 半天 |
-| 多用户与会话隔离校验 | [memory](../src/agent_template/memory/README.md) | 从单机工具变成服务时 | 两天 |
-
-## 第四波：范式扩展
-
-会改变项目性质的功能，建议先把前三波做扎实。
+会改变项目性质的功能，建议先把前两波做扎实。
 
 | 事项 | 出处 | 说明 |
 | --- | --- | --- |
 | 多 agent 协作 | [agent](../src/agent_template/agent/README.md) | 规划者 + 执行者，或并行探索多方案。注意限制递归深度 |
 | 长期记忆 | [memory](../src/agent_template/memory/README.md) | 跨会话记住用户偏好与项目约定。会引入"记错了怎么办"的新问题 |
 | 远程技能分发 | [skills](../src/agent_template/skills/README.md) | 概念上类似插件市场，会带来信任与更新问题 |
-| 语义切块 | [rag](../src/agent_template/rag/README.md) | 用向量相似度骤降点切分。建库成本翻倍、阈值难调，建议放在 rerank 之后再看 |
 | 多模态消息 | [llm](../src/agent_template/llm/README.md) | 支持图片输入需要改 `Message.content` 的类型，会波及所有构造点 |
 
----
+## 已经做完的（留个记录）
 
-## 如果要我排一个顺序
-
-**先做这两件，性价比排序几乎没有争议：**
-
-1. **修 obs logger 名 + llm 参数校验** —— 加起来二十分钟，都是消除已知隐患。
-2. **给 rerank 定候选数 + 加难评测集** —— 加起来半天。重排已经落地
-   （MRR 0.792 → 0.936），但评测集已经饱和：**不加难就分不清"改好了"和"本来就满分"**，
-   后面的所有优化都会失去反馈。
-
-**然后按你的实际痛点选：**
-
-- 对话变长就难受 → **上下文压缩**
-- 文档多了重建变慢 → **增量索引**
-- 想给同事演示或接前端 → **HTTP + SSE**
-- 模型老是用错工具 → **工具级统计 + 技能触发测试**（先拿到数据再优化）
-
-**最后提醒一句**：`tests/` 目录下的用例是上面所有这些改动的前提。没有测试，
-每次优化都是凭感觉；有了它，你才知道自己是真的改好了，还是只是换了个地方出错。
+- `obs` logger 名拼写、`llm` 的 `api_key` 类型兜底、CLI 里说明"全局选项写在子命令之前"
+- token 按会话 / 按轮次归因（写进 `traces.jsonl` 的 span，配 `scripts/usage.py`）
+- 同轮工具并发（只读并发、有副作用保序）、工具审批（Human in the loop）
+- MCP 启动失败的明确提示与诊断
+- **RAG 整体外移**：本仓库不再实现检索，改由外部 MCP 服务（ragkit）提供

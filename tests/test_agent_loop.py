@@ -140,18 +140,17 @@ async def test_stream_and_non_stream_agree(tmp_path: Path, stream: bool) -> None
 
 
 async def test_runtime_assembles_offline(tmp_path: Path) -> None:
-    """不连 MCP、不启用 RAG 时，运行时也该能装配并跑完一轮。"""
+    """不连 MCP 时，运行时也该能装配并跑完一轮。
+
+    （知识库检索现在也是 MCP 提供的一台服务器，所以这个用例等于"什么都没接"。）
+    """
     settings = Settings(
         llm_provider="mock",
         project_root=tmp_path,
         mcp_servers=[],
-        embedding_provider="local_hash",
-        embedding_dim=64,
     )
 
-    runtime = await AgentRuntime.create(
-        settings, connect_mcp=False, enable_rag=False
-    )
+    runtime = await AgentRuntime.create(settings, connect_mcp=False)
     try:
         # 5 个内置工具（时间、计算、读、列目录、写）+ load_skill / list_skills
         assert len(runtime.registry) == 7
@@ -523,12 +522,8 @@ async def test_runtime_forwards_the_approval_handler(tmp_path: Path) -> None:
         llm_provider="mock",
         project_root=tmp_path,
         mcp_servers=[],
-        embedding_provider="local_hash",
-        embedding_dim=64,
     )
-    runtime = await AgentRuntime.create(
-        settings, connect_mcp=False, enable_rag=False, approve=approve
-    )
+    runtime = await AgentRuntime.create(settings, connect_mcp=False, approve=approve)
     try:
         # 往运行时自己的工具表里塞一个"有副作用"的工具，
         # 再换上一个会主动调用它的假模型

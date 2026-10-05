@@ -24,9 +24,9 @@ def test_environment_beats_dotenv(monkeypatch) -> None:
 def test_relative_paths_resolve_against_project_root(tmp_path: Path) -> None:
     settings = Settings(project_root=tmp_path)
 
-    assert settings.resolve(Path("data/knowledge")) == tmp_path / "data" / "knowledge"
-    assert settings.index_path == tmp_path / ".agent" / "index.sqlite3"
+    assert settings.resolve(Path("skills")) == tmp_path / "skills"
     assert settings.memory_path == tmp_path / ".agent" / "memory.sqlite3"
+    assert settings.trace_path == tmp_path / ".agent" / "traces.jsonl"
 
 
 def test_absolute_paths_are_kept_as_is(tmp_path: Path) -> None:

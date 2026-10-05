@@ -41,5 +41,9 @@ async def register_mcp_tools(
             parameters=tool.parameters,
             handler=_handler_for(manager, tool),
             source=f"mcp:{tool.server}",
+            # 远端工具是不是只读，由服务端在 tools/list 里声明（readOnlyHint）。
+            # 这一步决定它在本地工具表里的两个行为：能否并发、要不要人工审批。
+            # 服务端没声明就按 False 处理——宁可多问一次人，也不要静默放行。
+            read_only=tool.read_only,
         )
     return registry

@@ -64,37 +64,9 @@ class Settings(BaseSettings):
     system_prompt: str = "" 
 
 
-    # --- RAG ---------------------------------------------------------------
-    embedding_provider: Literal["local_hash", "openai_compat"] = "local_hash"
-    embedding_model: str = "BAAI/bge-m3"
-    embedding_base_url: str = "https://api.siliconflow.cn/v1"
-    embedding_api_key: SecretStr | None = None
-    embedding_dim: int = 512
-    chunk_size: int = 500
-    chunk_overlap: int = 80
-    rag_top_k: int = 4
-    rag_candidates: int = 20
-
-
-
-    # --- 重排（rerank）-----------------------------------------------------
-    # 默认关闭：开启后，融合出的候选先过一遍重排模型，再取 rag_top_k 条给模型。
-    # 默认值选 "none" 是为了让接进检索层时，行为与之前完全一致。
-    rerank_provider: Literal["none", "openai_compat"] = "none"
-    rerank_model: str = "BAAI/bge-reranker-v2-m3"
-    rerank_base_url: str = "https://api.siliconflow.cn/v1"
-    rerank_api_key: SecretStr | None = None
-    # 送去重排的候选条数（重排后再取 rag_top_k 条）。比 rag_candidates 小，
-    # 因为重排是逐条打分的，候选越多越慢越贵。
-    rerank_candidates: int = 20
-
-
-    
-
     # --- Paths (relative values resolve against the project root) ----------
     project_root: Path = PROJECT_ROOT
     skills_dir: Path = Path("skills")
-    knowledge_dir: Path = Path("data/knowledge")
     state_dir: Path = Path(".agent")
     workspace_root: Path = Path(".")
 
@@ -113,11 +85,6 @@ class Settings(BaseSettings):
     def resolve(self, path: Path) -> Path:
         """absolute path for configured location"""
         return path if path.is_absolute() else self.project_root / path
-
-    @property # only read
-    def index_path(self) -> Path:
-        """SQLite file holding the RAG vector index."""
-        return self.resolve(self.state_dir) / "index.sqlite3"
 
     @property
     def memory_path(self) -> Path:
@@ -148,8 +115,10 @@ You have three kinds of capability:
   (current time, arithmetic, reading files, searching the knowledge base).
 - Skills: short human-written procedures, listed below. When one matches the
   task, call `load_skill` and read it fully before acting.
-- Knowledge base: call `search_knowledge_base` before answering questions about
-  indexed documents, and name the source file you used.
+- Knowledge base: `search_knowledge_base` is provided by an external service
+  (another MCP server) and may not always be available. When it is in your tool
+  list, call it before answering questions about indexed documents, and name the
+  source file you used. If it is missing, say so instead of guessing.
 
 Never invent tool results. If a tool fails, report the failure.
 """
